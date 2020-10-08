@@ -56,20 +56,28 @@ function failover() {
     ${LOGGER} "Resetting PF to egress via ${DESTINATION_NIC}"
     pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0=\"${EGRESS_NIC}\"
 
+    # Update route53
+    ${LOGGER} "Updating Route53"
+    sudo -u charles ~charles/bin/update-route53.sh .
+
     # Restart any daemons that home to a single egress
     for DAEMON in ${DAEMONS_TO_RESTART_ON_FW_CHANGE}; do
         ${LOGGER} "Restarting ${DAEMON}"
-        service ${DAEMON} restart
+        service ${DAEMON} stop
+        sleep 3
+        service ${DAEMON} start
     done
 
-    # Update route53
-    ${LOGGER} "Updating Route53"
-    sudo -u charles ~charles/bin/update-route53.sh
+    # Update first hop host entry:
+    ${LOGGER} "Updating FirstHop DNS entry"
+    /usr/local/bin/first_hop_entry.sh
 
     # Send Pushover notification
     ${LOGGER} "Sending pushover notification"
     WAN_IP="$(dig +short myip.opendns.com @resolver1.opendns.com)"
     echo "Failover to ${EGRESS_NIC} - ${WAN_IP} - $(date)" | /usr/local/bin/pushover_notify.sh
+
+
 }
 
 # Evaluate the failure sate
