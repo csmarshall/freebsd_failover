@@ -1,0 +1,96 @@
+#!/usr/local/bin/bash
+PATH=${PATH}:/sbin:/usr/bin:/usr/local/bin
+
+# FAIL
+# Oct  7 23:41:47 kong /etc/dpinger/failover[61064]: /etc/dpinger/failover
+# Oct  7 23:41:47 kong /etc/dpinger/failover[61065]: 1 igb0
+# Oct  7 23:41:47 kong /etc/dpinger/failover[61066]: 2 24.13.224.1
+# Oct  7 23:41:47 kong /etc/dpinger/failover[61067]: 3 1
+# Oct  7 23:41:48 kong /etc/dpinger/failover[61068]: 4 10288
+# Oct  7 23:41:48 kong /etc/dpinger/failover[61069]: 5 1644
+# SUCCEED
+# Oct  7 23:42:21 kong /etc/dpinger/failover[62252]: /etc/dpinger/failover
+# Oct  7 23:42:21 kong /etc/dpinger/failover[62253]: 1 igb0
+# Oct  7 23:42:21 kong /etc/dpinger/failover[62254]: 2 24.13.224.1
+# Oct  7 23:42:21 kong /etc/dpinger/failover[62255]: 3 0
+# Oct  7 23:42:21 kong /etc/dpinger/failover[62256]: 4 10034
+# Oct  7 23:42:21 kong /etc/dpinger/failover[62257]: 5 2391
+
+LOGGER="/usr/bin/logger -si -p user.notice -t ${0}"
+PRIMARY_NIC="${1}"
+BACKUP_NIC="${2}"
+TEST_DESTINATION="${3}"
+STATUS="${4}"
+LATENCY_AVG="${5}"
+LOSS_AVG="${6}"
+
+# NIC STATE INFO
+PRIMARY_NIC_DHCP_STATUS_FILE="/etc/dhclient_status_${PRIMARY_NIC}"
+BACKUP_NIC_DHCP_STATUS_FILE="/etc/dhclient_status_${BACKUP_NIC}"
+PRIMARY_NIC_GATEWAY="$(grep -e '^routers=' ${PRIMARY_NIC_DHCP_STATUS_FILE} | cut -d= -f2)"
+BACKUP_NIC_GATEWAY="$(grep -e '^routers=' ${BACKUP_NIC_DHCP_STATUS_FILE} | cut -d= -f2)"
+
+START_DEFAULT_ROUTE="$(netstat -rn | grep default | sed 's/ \{1,\}/ /g')"
+
+# PF Ruleset
+PF_RULE_FILE="/etc/pf/pf.dpinger.conf"
+PRIMARY_NIC_CONFIG_FILE="/etc/dhclient"
+# Hosts to prevent from egress when failed over
+IPS_TO_BLOCK_FROM_EGRESS="192.168.1.6"
+DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound miniupnpd avahi"
+
+function failover() {
+    EGRESS_NIC="${1}"
+    EGRESS_GATEWAY="$(grep -e '^routers=' /etc/dhclient_status_${EGRESS_NIC} | cut -d= -f2)"
+    
+    # Delete the default route
+
+    ${LOGGER} "Removing the current default route: ${START_DEFAULT_ROUTE}"
+    route delete default | ${LOGGER}
+    
+    # Add A route to the new 
+    ${LOGGER} "Adding default route via ${EGRESS_GATEWAY}"
+    route add default ${EGRESS_GATEWAY} | ${LOGGER}
+    
+    # Reset Firewall
+    ${LOGGER} "Resetting PF to egress via ${DESTINATION_NIC}"
+    pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0=\"${EGRESS_NIC}\"
+
+    # Restart any daemons that home to a single egress
+    for DAEMON in ${DAEMONS_TO_RESTART_ON_FW_CHANGE}; do
+        ${LOGGER} "Restarting ${DAEMON}"
+        service ${DAEMON} restart
+    done
+
+    # Update route53
+    ${LOGGER} "Updating Route53"
+    sudo -u charles ~charles/bin/update-route53.sh
+
+    # Send Pushover notification
+    ${LOGGER} "Sending pushover notification"
+    WAN_IP="$(dig +short myip.opendns.com @resolver1.opendns.com)"
+    echo "Failover to ${EGRESS_NIC} - ${WAN_IP} - $(date)" | /usr/local/bin/pushover_notify.sh
+}
+
+# Evaluate the failure sate
+if [[ "${STATUS}" == "1" ]] ; then
+    LOGGER="${LOGGER} - FAILURE: "
+    ${LOGGER} "Executing falover from ${PRIMARY_NIC} to ${BACKUP_NIC}"
+    failover ${BACKUP_NIC}
+    ${LOGGER} "Blocking access for the following hosts to conserve bandwidth: ${IPS_TO_BLOCK_FROM_EGRESS}"
+    for IP in ${IPS_TO_BLOCK_FROM_EGRESS}; do
+        pfctl -t nat_approved_wide -T add \!${IP} | ${LOGGER}
+    done 
+
+elif [[ "${STATUS}" == "0" ]]; then
+    LOGGER="${LOGGER} - RECOVERY: "
+    ${LOGGER} "Executing return to ${PRIMARY_NIC} from ${BACKUP_NIC}"
+    failover ${PRIMARY_NIC}
+else 
+    ${LOGGER} "UNKNOWN ALARM, exit 1"
+    exit 1
+fi
+
+${LOGGER} "Completed"
+
+
