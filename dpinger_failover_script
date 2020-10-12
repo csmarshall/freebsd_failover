@@ -16,6 +16,7 @@ PATH=${PATH}:/sbin:/usr/bin:/usr/local/bin
 # Oct  7 23:42:21 kong /etc/dpinger/failover[62256]: 4 10034
 # Oct  7 23:42:21 kong /etc/dpinger/failover[62257]: 5 2391
 
+BLINK="/usr/local/bin/blink1-tool"
 LOGGER="/usr/bin/logger -si -p user.notice -t ${0}"
 PRIMARY_NIC="${1}"
 BACKUP_NIC="${2}"
@@ -37,11 +38,12 @@ PF_RULE_FILE="/etc/pf/pf.dpinger.conf"
 PRIMARY_NIC_CONFIG_FILE="/etc/dhclient"
 # Hosts to prevent from egress when failed over
 IPS_TO_BLOCK_FROM_EGRESS="192.168.1.6"
-DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound miniupnpd avahi"
+DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata miniupnpd avahi"
 
 function failover() {
     EGRESS_NIC="${1}"
     EGRESS_GATEWAY="$(grep -e '^routers=' /etc/dhclient_status_${EGRESS_NIC} | cut -d= -f2)"
+    OPERATION="${2}"
     
     # Delete the default route
 
@@ -53,8 +55,8 @@ function failover() {
     route add default ${EGRESS_GATEWAY} | ${LOGGER}
     
     # Reset Firewall
-    ${LOGGER} "Resetting PF to egress via ${DESTINATION_NIC}"
-    pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0=\"${EGRESS_NIC}\"
+    ${LOGGER} "Resetting PF to egress via ${EGRESS_NIC}"
+    pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0="${EGRESS_NIC}"
 
     # Update route53
     ${LOGGER} "Updating Route53"
@@ -64,6 +66,10 @@ function failover() {
     for DAEMON in ${DAEMONS_TO_RESTART_ON_FW_CHANGE}; do
         ${LOGGER} "Restarting ${DAEMON}"
         service ${DAEMON} stop
+        if [[ "${DAEMON}" == "unbound" ]]; then
+            ${LOGGER} "Removing /etc/unbound/root.key"
+            rm -v /etc/unbound/root.key
+        fi
         sleep 3
         service ${DAEMON} start
     done
@@ -75,30 +81,33 @@ function failover() {
     # Send Pushover notification
     ${LOGGER} "Sending pushover notification"
     WAN_IP="$(dig +short myip.opendns.com @resolver1.opendns.com)"
-    echo "Failover to ${EGRESS_NIC} - ${WAN_IP} - $(date)" | /usr/local/bin/pushover_notify.sh
+    echo "${OPERATION} to ${EGRESS_NIC} - ${WAN_IP} - $(date)" | /usr/local/bin/pushover_notify.sh
 
 
 }
 
 # Evaluate the failure sate
 if [[ "${STATUS}" == "1" ]] ; then
-    LOGGER="${LOGGER} - FAILURE: "
+    COLOR="ea0a8e"
+    LOGGER="${LOGGER} FAILOVER: "
     ${LOGGER} "Executing falover from ${PRIMARY_NIC} to ${BACKUP_NIC}"
-    failover ${BACKUP_NIC}
+    failover ${BACKUP_NIC} Failover
     ${LOGGER} "Blocking access for the following hosts to conserve bandwidth: ${IPS_TO_BLOCK_FROM_EGRESS}"
     for IP in ${IPS_TO_BLOCK_FROM_EGRESS}; do
         pfctl -t nat_approved_wide -T add \!${IP} | ${LOGGER}
     done 
 
 elif [[ "${STATUS}" == "0" ]]; then
-    LOGGER="${LOGGER} - RECOVERY: "
+    COLOR="000000"
+    LOGGER="${LOGGER} - RECOVER: "
     ${LOGGER} "Executing return to ${PRIMARY_NIC} from ${BACKUP_NIC}"
-    failover ${PRIMARY_NIC}
+    failover ${PRIMARY_NIC} Recover
 else 
     ${LOGGER} "UNKNOWN ALARM, exit 1"
     exit 1
 fi
 
+${BLINK} --rgb=${COLOR}
 ${LOGGER} "Completed"
 
 
