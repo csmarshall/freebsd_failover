@@ -37,7 +37,7 @@ START_DEFAULT_ROUTE="$(netstat -rn | grep default | sed 's/ \{1,\}/ /g')"
 PF_RULE_FILE="/etc/pf/pf.dpinger.conf"
 PRIMARY_NIC_CONFIG_FILE="/etc/dhclient"
 # Hosts to prevent from egress when failed over
-#IPS_TO_BLOCK_FROM_EGRESS="192.168.1.6"
+IPS_TO_BLOCK_FROM_EGRESS="192.168.1.6"
 DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata smokeping miniupnpd avahi-daemon"
 
 function failover() {
@@ -101,8 +101,8 @@ if [[ "${STATUS}" == "1" ]] ; then
     LOGGER="${LOGGER} FAILOVER: "
     ${LOGGER} "Executing falover from ${PRIMARY_NIC} to ${BACKUP_NIC}"
     failover ${BACKUP_NIC} ${PRIMARY_NIC} Failover
-    ${LOGGER} "Blocking access for the following hosts to conserve bandwidth: ${IPS_TO_BLOCK_FROM_EGRESS}"
     for IP in ${IPS_TO_BLOCK_FROM_EGRESS}; do
+        ${LOGGER} "Blocking access for the following hosts to conserve bandwidth: ${IPS_TO_BLOCK_FROM_EGRESS}"
         pfctl -t nat_approved_wide -T add \!${IP} | ${LOGGER}
     done 
 
