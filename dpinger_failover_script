@@ -56,8 +56,10 @@ function failover() {
     route add default ${EGRESS_GATEWAY} | ${LOGGER}
     
     # Reset Firewall
+    ${LOGGER} "Flushing PF"
+    pfctl -g -v -F all
     ${LOGGER} "Resetting PF to egress via ${EGRESS_NIC}"
-    pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0="${PRI_NIC}" -D ext_if1="${SEC_NIC}"
+    pfctl -g -v -f /etc/pf/pf.dpinger.conf -D ext_if0="${PRI_NIC}" -D ext_if1="${SEC_NIC}" -D int_if0="igb2"
 
     ${LOGGER} "Updating LED to give visual notification"
     ${BLINK} --rgb=${COLOR}
