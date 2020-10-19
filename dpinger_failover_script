@@ -68,8 +68,9 @@ function failover() {
         if [[ "${DAEMON}" == "unbound" ]]; then
             ${LOGGER} "Removing /etc/unbound/root.key"
             rm -v /etc/unbound/root.key
-            pkill -9 unbound
         fi
+        ${LOGGER} "Killing any ${DAEMON} stragglers"
+        pkill -9 ${DAEMON}
         sleep 1
         service ${DAEMON} start
     done
@@ -84,7 +85,7 @@ function failover() {
 
     # Send Pushover notification
     ${LOGGER} "Sending pushover notification"
-    netstat -rn | grep UGS | cut -w -f4 | xargs ifconfig | grep inet | cut -w -f3 | xagrs -I{} echo "${OPERATION} to ${EGRESS_NIC} - {} - $(date)" | /usr/local/bin/pushover_notify.sh &
+    ifconfig ${EGRESS_NIC} | grep inet | cut -w -f3 | xagrs -I{} echo "${OPERATION} to ${EGRESS_NIC} - {} - $(date)" | /usr/local/bin/pushover_notify.sh &
 
     # Make *SURE* the LED is set correctly
     ${LOGGER} "Updating LED to give visual notification again"
