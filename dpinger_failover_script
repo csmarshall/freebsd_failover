@@ -37,13 +37,13 @@ START_DEFAULT_ROUTE="$(netstat -rn | grep default | sed 's/ \{1,\}/ /g')"
 PF_RULE_FILE="/etc/pf/pf.dpinger.conf"
 PRIMARY_NIC_CONFIG_FILE="/etc/dhclient"
 # Hosts to prevent from egress when failed over
-IPS_TO_BLOCK_FROM_EGRESS="192.168.1.6"
-DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata miniupnpd avahi-daemon"
+#IPS_TO_BLOCK_FROM_EGRESS="192.168.1.6"
+DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata smokeping miniupnpd avahi-daemon"
 
 function failover() {
-    EGRESS_NIC="${1}"
-    BACKUP_NIC="${2}"
-    EGRESS_GATEWAY="$(grep -e '^routers=' /etc/dhclient_status_${EGRESS_NIC} | cut -d= -f2)"
+    PRI_NIC="${1}"
+    SEC_NIC="${2}"
+    EGRESS_GATEWAY="$(cat /tmp/${PRI_NIC}_router)"
     OPERATION="${3}"
     
     # Delete the default route
@@ -57,7 +57,7 @@ function failover() {
     
     # Reset Firewall
     ${LOGGER} "Resetting PF to egress via ${EGRESS_NIC}"
-    pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0="${EGRESS_NIC}" -D ext_if1="${BACKUP_NIC}"
+    pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0="${PRI_NIC}" -D ext_if1="${SEC_NIC}"
 
     ${LOGGER} "Updating LED to give visual notification"
     ${BLINK} --rgb=${COLOR}
@@ -86,7 +86,7 @@ function failover() {
 
     # Send Pushover notification
     ${LOGGER} "Sending pushover notification"
-    ifconfig ${EGRESS_NIC} | grep inet | cut -w -f3 | xagrs -I{} echo "${OPERATION} to ${EGRESS_NIC} - {} - $(date)" | /usr/local/bin/pushover_notify.sh &
+    echo "${OPERATION} to ${EGRESS_NIC} - $(cat /var/db/${PRI_NIC}_ip) - $(date)" | /usr/local/bin/pushover_notify.sh &
 
     # Make *SURE* the LED is set correctly
     ${LOGGER} "Updating LED to give visual notification again"
