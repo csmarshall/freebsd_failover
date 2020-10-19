@@ -42,8 +42,9 @@ DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata miniupnpd avahi-daemon"
 
 function failover() {
     EGRESS_NIC="${1}"
+    BACKUP_NIC="${2}"
     EGRESS_GATEWAY="$(grep -e '^routers=' /etc/dhclient_status_${EGRESS_NIC} | cut -d= -f2)"
-    OPERATION="${2}"
+    OPERATION="${3}"
     
     # Delete the default route
 
@@ -56,7 +57,7 @@ function failover() {
     
     # Reset Firewall
     ${LOGGER} "Resetting PF to egress via ${EGRESS_NIC}"
-    pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0="${EGRESS_NIC}"
+    pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0="${EGRESS_NIC}" -D ext_if1="${BACKUP_NIC}"
 
     ${LOGGER} "Updating LED to give visual notification"
     ${BLINK} --rgb=${COLOR}
@@ -97,7 +98,7 @@ if [[ "${STATUS}" == "1" ]] ; then
     COLOR="ea0a8e"
     LOGGER="${LOGGER} FAILOVER: "
     ${LOGGER} "Executing falover from ${PRIMARY_NIC} to ${BACKUP_NIC}"
-    failover ${BACKUP_NIC} Failover
+    failover ${BACKUP_NIC} ${PRIMARY_NIC} Failover
     ${LOGGER} "Blocking access for the following hosts to conserve bandwidth: ${IPS_TO_BLOCK_FROM_EGRESS}"
     for IP in ${IPS_TO_BLOCK_FROM_EGRESS}; do
         pfctl -t nat_approved_wide -T add \!${IP} | ${LOGGER}
@@ -107,7 +108,7 @@ elif [[ "${STATUS}" == "0" ]]; then
     COLOR="000000"
     LOGGER="${LOGGER} - RECOVER: "
     ${LOGGER} "Executing return to ${PRIMARY_NIC} from ${BACKUP_NIC}"
-    failover ${PRIMARY_NIC} Recover
+    failover ${PRIMARY_NIC} ${BACKUP_NIC} Recover
 else 
     ${LOGGER} "UNKNOWN ALARM, exit 1"
     exit 1
