@@ -84,7 +84,11 @@ function failover() {
 
     # Send Pushover notification
     ${LOGGER} "Sending pushover notification"
-    dig +short myip.opendns.com @resolver1.opendns.com | xagrs -I{} echo "${OPERATION} to ${EGRESS_NIC} - {} - $(date)" | /usr/local/bin/pushover_notify.sh &
+    netstat -rn | grep UGS | cut -w -f4 | xargs ifconfig | grep inet | cut -w -f3 | xagrs -I{} echo "${OPERATION} to ${EGRESS_NIC} - {} - $(date)" | /usr/local/bin/pushover_notify.sh &
+
+    # Make *SURE* the LED is set correctly
+    ${LOGGER} "Updating LED to give visual notification again"
+    ${BLINK} --rgb=${COLOR}
 }
 
 # Evaluate the failure sate
