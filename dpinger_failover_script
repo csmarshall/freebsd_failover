@@ -20,10 +20,11 @@ BLINK="/usr/local/bin/blink1-tool"
 LOGGER="/usr/bin/logger -si -p user.notice -t ${0}"
 PRIMARY_NIC="${1}"
 BACKUP_NIC="${2}"
-TEST_DESTINATION="${3}"
-STATUS="${4}"
-LATENCY_AVG="${5}"
-LOSS_AVG="${6}"
+LAN_NIC="${3}"
+TEST_DESTINATION="${4}"
+STATUS="${5}"
+LATENCY_AVG="${6}"
+LOSS_AVG="${7}"
 
 # NIC STATE INFO
 PRIMARY_NIC_DHCP_STATUS_FILE="/etc/dhclient_status_${PRIMARY_NIC}"
@@ -56,10 +57,8 @@ function failover() {
     route add default ${EGRESS_GATEWAY} | ${LOGGER}
     
     # Reset Firewall
-    ${LOGGER} "Flushing PF"
-    pfctl -g -v -F all
     ${LOGGER} "Resetting PF to egress via ${EGRESS_NIC}"
-    pfctl -g -v -f /etc/pf/pf.dpinger.conf -D ext_if0="${PRI_NIC}" -D ext_if1="${SEC_NIC}" -D int_if0="igb2"
+    pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0="${PRI_NIC}" -D ext_if1="${SEC_NIC}" -D int_if0="${LAN_NIC}"
 
     ${LOGGER} "Updating LED to give visual notification"
     ${BLINK} --rgb=${COLOR}
