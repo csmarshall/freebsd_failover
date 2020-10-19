@@ -65,11 +65,12 @@ function failover() {
     for DAEMON in ${DAEMONS_TO_RESTART_ON_FW_CHANGE}; do
         ${LOGGER} "Restarting ${DAEMON}"
         service ${DAEMON} stop
-   #     if [[ "${DAEMON}" == "unbound" ]]; then
-   #         ${LOGGER} "Removing /etc/unbound/root.key"
-   #         rm -v /etc/unbound/root.key
-   #     fi
-        sleep 3
+        if [[ "${DAEMON}" == "unbound" ]]; then
+            ${LOGGER} "Removing /etc/unbound/root.key"
+            rm -v /etc/unbound/root.key
+            pkill -9 unbound
+        fi
+        sleep 1
         service ${DAEMON} start
     done
 
