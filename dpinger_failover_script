@@ -27,16 +27,12 @@ LATENCY_AVG="${6}"
 LOSS_AVG="${7}"
 
 # NIC STATE INFO
-PRIMARY_NIC_DHCP_STATUS_FILE="/etc/dhclient_status_${PRIMARY_NIC}"
-BACKUP_NIC_DHCP_STATUS_FILE="/etc/dhclient_status_${BACKUP_NIC}"
-PRIMARY_NIC_GATEWAY="$(grep -e '^routers=' ${PRIMARY_NIC_DHCP_STATUS_FILE} | cut -d= -f2)"
-BACKUP_NIC_GATEWAY="$(grep -e '^routers=' ${BACKUP_NIC_DHCP_STATUS_FILE} | cut -d= -f2)"
-
+PRIMARY_NIC_GATEWAY="$(cat /tmp/${PRIMARY_NIC}_router)"
+BACKUP_NIC_GATEWAY="$(cat /tmp/${BACKUP_NIC}_router)"
 START_DEFAULT_ROUTE="$(netstat -rn | grep default | sed 's/ \{1,\}/ /g')"
 
 # PF Ruleset
 PF_RULE_FILE="/etc/pf/pf.dpinger.conf"
-PRIMARY_NIC_CONFIG_FILE="/etc/dhclient"
 # Hosts to prevent from egress when failed over
 IPS_TO_BLOCK_FROM_EGRESS="192.168.1.6"
 DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata smokeping miniupnpd avahi-daemon"
@@ -58,7 +54,7 @@ function failover() {
     
     # Reset Firewall
     ${LOGGER} "Resetting PF to egress via ${EGRESS_NIC}"
-    pfctl -g -v -F all -f /etc/pf/pf.dpinger.conf -D ext_if0="${PRI_NIC}" -D ext_if1="${SEC_NIC}" -D int_if0="${LAN_NIC}"
+    pfctl -g -v -F all -f ${PF_RULE_FILE} -D ext_if0="${PRI_NIC}" -D ext_if1="${SEC_NIC}" -D int_if0="${LAN_NIC}"
 
     ${LOGGER} "Updating LED to give visual notification"
     ${BLINK} --rgb=${COLOR}
@@ -111,7 +107,7 @@ elif [[ "${STATUS}" == "0" ]]; then
     ${LOGGER} "Executing return to ${PRIMARY_NIC} from ${BACKUP_NIC}"
     failover ${PRIMARY_NIC} ${BACKUP_NIC} Recover
 else 
-    ${LOGGER} "UNKNOWN ALARM, exit 1"
+    ${LOGGER} "UNKNOWN ALARM ${STATUS}, exit 1"
     exit 1
 fi
 
