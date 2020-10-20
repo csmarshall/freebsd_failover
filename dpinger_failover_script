@@ -39,7 +39,7 @@ DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata smokeping miniupnpd avahi-daemo
 
 function failover() {
     PRI_NIC="${1}"
-    SEC_NIC="${2}"
+    BAC_NIC="${2}"
     EGRESS_GATEWAY="$(cat /tmp/${PRI_NIC}_router)"
     OPERATION="${3}"
     
@@ -47,14 +47,20 @@ function failover() {
 
     ${LOGGER} "Removing the current default route: ${START_DEFAULT_ROUTE}"
     route delete default | ${LOGGER}
+
+    ${LOGGER} "Removing ${BAC_NIC} from the egress NIC group"
+    ifconfig ${BAC_NIC} -group egress | ${LOGGER}
     
     # Add A route to the new 
     ${LOGGER} "Adding default route via ${EGRESS_GATEWAY}"
     route add default ${EGRESS_GATEWAY} | ${LOGGER}
+
+    ${LOGGER} "Addping ${PRI_NIC} from the egress NIC group"
+    ifconfig ${PRI_NIC} group egress | ${LOGGER}
     
     # Reset Firewall
     ${LOGGER} "Resetting PF to egress via ${EGRESS_NIC}"
-    pfctl -g -v -F all -f ${PF_RULE_FILE} -D ext_if0="${PRI_NIC}" -D ext_if1="${SEC_NIC}" -D int_if0="${LAN_NIC}"
+    pfctl -g -v -F all -f ${PF_RULE_FILE}
 
     ${LOGGER} "Updating LED to give visual notification"
     ${BLINK} --rgb=${COLOR}
