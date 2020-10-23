@@ -1,0 +1,63 @@
+#!/usr/local/bin/bash -x
+PATH=${PATH}:/usr/local/bin
+SCRIPT="$(basename ${0})"
+LOGGER="/usr/bin/logger -si -p user.notice -t ${SCRIPT}"
+
+DEFAULT_NIC="${1}"
+BACKUP_NIC="${2}"
+SCRIPT="$(basename ${0})"
+DEFAULT_NIC_IP="$(cat /var/db/${DEFAULT_NIC}_ip)"
+DEFAULT_NIC_GATEWAY="$(cat /tmp/${DEFAULT_NIC}_router)"
+DPINGER_PIDFILE="/var/run/dpinger_${DEFAULT_NIC}.pid"
+DPINGER_LOGFILE="/var/log/dpinger_${DEFAULT_NIC}.log"
+
+#    -S log warnings via syslog
+#    -P priority scheduling for receive thread (requires root)
+#    -B bind (source) address
+#    -s time interval between echo requests (default 500ms)
+#    -l time interval before packets are treated as lost (default 4x send interval)
+#    -t time period over which results are averaged (default 60s)
+#    -r time interval between reports (default 1s)
+#    -o output file for reports (default stdout)
+#    -A time interval between alerts (default 1s)
+#    -D time threshold for latency alarm (default none)
+#    -L percent threshold for loss alarm (default none)
+#    -C optional command to be invoked via system() for alerts
+#    -i identifier text to include in output
+#    -u unix socket name for polling
+#    -p process id file name
+
+
+
+if [[ $(pgrep dpinger &>/dev/null ; echo $?) -eq 0 ]]; then
+    ${LOGGER} "PKilling exsting dpinger"
+    pkill dpinger
+    if [[ -s ${DPINGER_PIDFILE} ]]; then
+        ${LOGGER} "Removing existing ${DPINGER_PIDFILE}"
+        rm -v ${DPINGER_PIDFILE}
+    fi
+fi
+
+${LOGGER} "Starting dpinger - ${DEFAULT_NIC} - ${DEFAULT_NIC_GATEWAY}"
+
+exec dpinger -i dpinger_${DEFAULT_NIC} \
+    -p ${DPINGER_PIDFILE} \
+    -B ${DEFAULT_NIC_IP} \
+    -P \
+    -S \
+    -C "/etc/dpinger/failover ${DEFAULT_NIC} ${BACKUP_NIC}" \
+    -t 5s \
+    -L 25% \
+    -o ${DPINGER_LOGFILE} \
+    ${DEFAULT_NIC_GATEWAY} &
+
+DPINGER_STARTUP_STATUS=$?
+
+sleep .1
+
+if [[ ${DPINGER_STARTUP_STATUS} -eq 0 ]]; then
+    ${LOGGER} "Started dpinger under PID $(cat ${DPINGER_PIDFILE}) for ${DEFAULT_NIC}"
+else
+    ${LOGGER} "Start dpinger failed for ${DEFAULT_NIC}"        
+fi
+
