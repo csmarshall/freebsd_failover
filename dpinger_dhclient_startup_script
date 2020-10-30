@@ -46,7 +46,7 @@ exec dpinger -i dpinger_${DEFAULT_NIC} \
     -P \
     -S \
     -C "/etc/dpinger/failover ${DEFAULT_NIC} ${BACKUP_NIC}" \
-    -t 5s \
+    -t 20s \
     -L 25% \
     -o ${DPINGER_LOGFILE} \
     ${DEFAULT_NIC_GATEWAY} &

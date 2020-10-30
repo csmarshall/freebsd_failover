@@ -1,5 +1,6 @@
 #!/usr/local/bin/bash
 PATH=${PATH}:/sbin:/usr/bin:/usr/local/bin
+PID="$$"
 
 # FAIL
 # Oct  7 23:41:47 kong /etc/dpinger/failover[61064]: /etc/dpinger/failover
@@ -17,7 +18,7 @@ PATH=${PATH}:/sbin:/usr/bin:/usr/local/bin
 # Oct  7 23:42:21 kong /etc/dpinger/failover[62257]: 5 2391
 
 BLINK="/usr/local/bin/blink1-tool"
-LOGGER="/usr/bin/logger -si -p user.notice -t ${0}"
+LOGGER="/usr/bin/logger -s -p user.notice -t ${0}[$PID]"
 PRIMARY_NIC="${1}"
 BACKUP_NIC="${2}"
 LAN_NIC="${3}"
@@ -35,7 +36,8 @@ START_DEFAULT_ROUTE="$(netstat -rn | grep default | sed 's/ \{1,\}/ /g')"
 PF_RULE_FILE="/etc/pf/pf.simple.conf"
 # Hosts to prevent from egress when failed over
 IPS_TO_BLOCK_FROM_EGRESS="192.168.1.6"
-DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata smokeping miniupnpd avahi-daemon"
+#DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata smokeping miniupnpd avahi-daemon"
+DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound miniupnpd avahi-daemon"
 
 function failover() {
     PRI_NIC="${1}"
@@ -59,7 +61,7 @@ function failover() {
     ifconfig ${PRI_NIC} group egress | ${LOGGER}
     
     # Reset Firewall
-    ${LOGGER} "Resetting PF to egress via ${EGRESS_NIC}"
+    ${LOGGER} "Resetting PF to egress via ${PRI_NIC}"
     pfctl -g -v -F all -f ${PF_RULE_FILE}
 
     ${LOGGER} "Updating LED to give visual notification"
@@ -74,9 +76,7 @@ function failover() {
             rm -v /etc/unbound/root.key
         fi
         ${LOGGER} "Killing any ${DAEMON} stragglers"
-        pkill -9 ${DAEMON}
-        sleep 1
-        service ${DAEMON} start
+        service ${DAEMON} start &
     done
 
     # Update route53
@@ -89,7 +89,7 @@ function failover() {
 
     # Send Pushover notification
     ${LOGGER} "Sending pushover notification"
-    echo "${OPERATION} to ${EGRESS_NIC} - $(cat /var/db/${PRI_NIC}_ip) - $(date)" | /usr/local/bin/pushover_notify.sh &
+    echo "${OPERATION} to ${PRI_NIC} - $(cat /var/db/${PRI_NIC}_ip) - $(date)" | /usr/local/bin/pushover_notify.sh &
 
     # Make *SURE* the LED is set correctly
     ${LOGGER} "Updating LED to give visual notification again"
@@ -109,9 +109,9 @@ if [[ "${STATUS}" == "1" ]] ; then
 
 elif [[ "${STATUS}" == "0" ]]; then
     COLOR="000000"
-    LOGGER="${LOGGER} - RECOVER: "
+    LOGGER="${LOGGER} RECOVERY: "
     ${LOGGER} "Executing return to ${PRIMARY_NIC} from ${BACKUP_NIC}"
-    failover ${PRIMARY_NIC} ${BACKUP_NIC} Recover
+    failover ${PRIMARY_NIC} ${BACKUP_NIC} Recovery
 else 
     ${LOGGER} "UNKNOWN ALARM ${STATUS}, exit 1"
     exit 1
