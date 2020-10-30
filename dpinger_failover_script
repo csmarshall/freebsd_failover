@@ -51,14 +51,14 @@ function failover() {
     route delete default | ${LOGGER}
 
     ${LOGGER} "Removing ${BAC_NIC} from the egress NIC group"
-    ifconfig ${BAC_NIC} -group egress | ${LOGGER}
+    ifconfig ${BAC_NIC} -group egress
     
     # Add A route to the new 
     ${LOGGER} "Adding default route via ${EGRESS_GATEWAY}"
     route add default ${EGRESS_GATEWAY} | ${LOGGER}
 
-    ${LOGGER} "Addping ${PRI_NIC} from the egress NIC group"
-    ifconfig ${PRI_NIC} group egress | ${LOGGER}
+    ${LOGGER} "Adding ${PRI_NIC} to the egress NIC group"
+    ifconfig ${PRI_NIC} group egress 
     
     # Reset Firewall
     ${LOGGER} "Resetting PF to egress via ${PRI_NIC}"
