@@ -89,7 +89,7 @@ function failover() {
 
     # Send Pushover notification
     ${LOGGER} "Sending pushover notification"
-    echo "${OPERATION} to ${PRI_NIC} - $(cat /var/db/${PRI_NIC}_ip) - $(date)" | /usr/local/bin/pushover_notify.sh &
+    echo "${OPERATION} to ${PRI_NIC} - $(cat /var/db/${PRI_NIC}_ip) - $(date)" | /usr/local/bin/pushover_message.sh high &
 
     # Make *SURE* the LED is set correctly
     ${LOGGER} "Updating LED to give visual notification again"
@@ -117,6 +117,5 @@ else
     exit 1
 fi
 
-${LOGGER} "Completed"
-
+${LOGGER} "Completed at $(date +'%F %T %Z') " 2>&1 | tee -a /var/log/network_failover.log >&2
 
