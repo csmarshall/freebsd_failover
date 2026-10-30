@@ -1,121 +1,198 @@
 #!/usr/local/bin/bash
+#
+# FreeBSD Network Failover Script
+# Handles network interface failover when connectivity issues are detected by dpinger
+# Called by dpinger when packet loss exceeds threshold or when connectivity is restored
+#
+# Arguments provided by dpinger:
+# $1: Primary network interface
+# $2: Backup network interface
+# $3: LAN interface (unused)
+# $4: Test destination (unused)
+# $5: Status (0=recovery, 1=failure)
+# $6: Average latency
+# $7: Average loss percentage
+#
+
+set -euo pipefail
 PATH=${PATH}:/sbin:/usr/bin:/usr/local/bin
-PID="$$"
 
-# FAIL
-# Oct  7 23:41:47 kong /etc/dpinger/failover[61064]: /etc/dpinger/failover
-# Oct  7 23:41:47 kong /etc/dpinger/failover[61065]: 1 igb0
-# Oct  7 23:41:47 kong /etc/dpinger/failover[61066]: 2 24.13.224.1
-# Oct  7 23:41:47 kong /etc/dpinger/failover[61067]: 3 1
-# Oct  7 23:41:48 kong /etc/dpinger/failover[61068]: 4 10288
-# Oct  7 23:41:48 kong /etc/dpinger/failover[61069]: 5 1644
-# SUCCEED
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62252]: /etc/dpinger/failover
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62253]: 1 igb0
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62254]: 2 24.13.224.1
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62255]: 3 0
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62256]: 4 10034
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62257]: 5 2391
+# Load the failover library
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+source "${SCRIPT_DIR}/failover-lib.sh"
 
-BLINK="/usr/local/bin/blink1-tool"
-LOGGER="/usr/bin/logger -s -p user.notice -t ${0}[$PID]"
-PRIMARY_NIC="${1}"
-BACKUP_NIC="${2}"
-LAN_NIC="${3}"
-TEST_DESTINATION="${4}"
-STATUS="${5}"
-LATENCY_AVG="${6}"
-LOSS_AVG="${7}"
+# Initialize the library
+init_failover_lib
 
-# NIC STATE INFO
-PRIMARY_NIC_GATEWAY="$(cat /tmp/${PRIMARY_NIC}_router)"
-BACKUP_NIC_GATEWAY="$(cat /tmp/${BACKUP_NIC}_router)"
-START_DEFAULT_ROUTE="$(netstat -rn | grep default | sed 's/ \{1,\}/ /g')"
+# Parse arguments
+PRIMARY_NIC="${1:-}"
+BACKUP_NIC="${2:-}"
+LAN_NIC="${3:-}"
+TEST_DESTINATION="${4:-}"
+STATUS="${5:-}"
+LATENCY_AVG="${6:-}"
+LOSS_AVG="${7:-}"
 
-# PF Ruleset
-PF_RULE_FILE="/etc/pf/pf.simple.conf"
-# Hosts to prevent from egress when failed over
-IPS_TO_BLOCK_FROM_EGRESS="192.168.1.6"
-#DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata smokeping miniupnpd avahi-daemon"
-DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound miniupnpd avahi-daemon"
-
-function failover() {
-    PRI_NIC="${1}"
-    BAC_NIC="${2}"
-    EGRESS_GATEWAY="$(cat /tmp/${PRI_NIC}_router)"
-    OPERATION="${3}"
-    
-    # Delete the default route
-
-    ${LOGGER} "Removing the current default route: ${START_DEFAULT_ROUTE}"
-    route delete default | ${LOGGER}
-
-    ${LOGGER} "Removing ${BAC_NIC} from the egress NIC group"
-    ifconfig ${BAC_NIC} -group egress
-    
-    # Add A route to the new 
-    ${LOGGER} "Adding default route via ${EGRESS_GATEWAY}"
-    route add default ${EGRESS_GATEWAY} | ${LOGGER}
-
-    ${LOGGER} "Adding ${PRI_NIC} to the egress NIC group"
-    ifconfig ${PRI_NIC} group egress 
-    
-    # Reset Firewall
-    ${LOGGER} "Resetting PF to egress via ${PRI_NIC}"
-    pfctl -g -v -F all -f ${PF_RULE_FILE}
-
-    ${LOGGER} "Updating LED to give visual notification"
-    ${BLINK} --rgb=${COLOR}
-
-    # Restart any daemons that home to a single egress
-    for DAEMON in ${DAEMONS_TO_RESTART_ON_FW_CHANGE}; do
-        ${LOGGER} "Restarting ${DAEMON}"
-        service ${DAEMON} stop
-        if [[ "${DAEMON}" == "unbound" ]]; then
-            ${LOGGER} "Removing /etc/unbound/root.key"
-            rm -v /etc/unbound/root.key
-        fi
-        ${LOGGER} "Killing any ${DAEMON} stragglers"
-        service ${DAEMON} start &
-    done
-
-    # Update route53
-    ${LOGGER} "Updating Route53"
-    sudo -u charles ~charles/bin/update-route53.sh .
-
-    # Update first hop host entry:
-    ${LOGGER} "Updating FirstHop DNS entry"
-    /usr/local/bin/first_hop_entry.sh & 
-
-    # Send Pushover notification
-    ${LOGGER} "Sending pushover notification"
-    echo "${OPERATION} to ${PRI_NIC} - $(cat /var/db/${PRI_NIC}_ip) - $(date)" | /usr/local/bin/pushover_message.sh high &
-
-    # Make *SURE* the LED is set correctly
-    ${LOGGER} "Updating LED to give visual notification again"
-    ${BLINK} --rgb=${COLOR}
-}
-
-# Evaluate the failure sate
-if [[ "${STATUS}" == "1" ]] ; then
-    COLOR="ea0a8e"
-    LOGGER="${LOGGER} FAILOVER: "
-    ${LOGGER} "Executing falover from ${PRIMARY_NIC} to ${BACKUP_NIC}"
-    failover ${BACKUP_NIC} ${PRIMARY_NIC} Failover
-    for IP in ${IPS_TO_BLOCK_FROM_EGRESS}; do
-        ${LOGGER} "Blocking access for the following hosts to conserve bandwidth: ${IPS_TO_BLOCK_FROM_EGRESS}"
-        pfctl -t nat_approved_wide -T add \!${IP} | ${LOGGER}
-    done 
-
-elif [[ "${STATUS}" == "0" ]]; then
-    COLOR="000000"
-    LOGGER="${LOGGER} RECOVERY: "
-    ${LOGGER} "Executing return to ${PRIMARY_NIC} from ${BACKUP_NIC}"
-    failover ${PRIMARY_NIC} ${BACKUP_NIC} Recovery
-else 
-    ${LOGGER} "UNKNOWN ALARM ${STATUS}, exit 1"
+# Validate required arguments
+if [[ -z "$PRIMARY_NIC" || -z "$BACKUP_NIC" || -z "$STATUS" ]]; then
+    log_error "Usage: $0 <primary_nic> <backup_nic> [lan_nic] [test_dest] <status> [latency] [loss]"
+    log_error "Called with: $*"
     exit 1
 fi
 
-${LOGGER} "Completed at $(date +'%F %T %Z') " 2>&1 | tee -a /var/log/network_failover.log >&2
+# Validate status
+if [[ "$STATUS" != "0" && "$STATUS" != "1" ]]; then
+    log_error "Invalid status '$STATUS'. Expected 0 (recovery) or 1 (failure)"
+    exit 1
+fi
 
+# Validate interfaces
+validate_interface "$PRIMARY_NIC" || exit 1
+validate_interface "$BACKUP_NIC" || exit 1
+
+# Acquire lock to prevent race conditions
+acquire_lock 30 || {
+    log_error "Could not acquire lock - another failover operation may be running"
+    exit 1
+}
+
+log_info "=== NETWORK FAILOVER TRIGGERED ==="
+log_info "Primary: $PRIMARY_NIC, Backup: $BACKUP_NIC, Status: $STATUS"
+log_info "Latency: ${LATENCY_AVG:-N/A}, Loss: ${LOSS_AVG:-N/A}%"
+
+# Read gateway information
+if ! PRIMARY_NIC_GATEWAY="$(cat "/tmp/${PRIMARY_NIC}_router" 2>/dev/null)"; then
+    log_error "Cannot read gateway for $PRIMARY_NIC"
+    exit 1
+fi
+
+if ! BACKUP_NIC_GATEWAY="$(cat "/tmp/${BACKUP_NIC}_router" 2>/dev/null)"; then
+    log_error "Cannot read gateway for $BACKUP_NIC"
+    exit 1
+fi
+
+# Get current routing state
+START_DEFAULT_ROUTE="$(netstat -rn | grep '^default' | head -1 || echo "No default route")"
+log_debug "Current default route: $START_DEFAULT_ROUTE"
+
+#############################################################################
+# FAILOVER FUNCTION
+#############################################################################
+
+perform_failover() {
+    local active_nic="$1"
+    local inactive_nic="$2"
+    local operation="$3"
+    local led_color="$4"
+
+    log_info "=== Starting $operation to $active_nic ==="
+
+    # Save current network state for potential rollback
+    save_network_state
+
+    # Read gateway for the active interface
+    local egress_gateway
+    if ! egress_gateway="$(cat "/tmp/${active_nic}_router" 2>/dev/null)"; then
+        log_error "Cannot read gateway for active interface $active_nic"
+        return 1
+    fi
+
+    # Step 1: Remove current default route
+    log_info "Removing current default route: $START_DEFAULT_ROUTE"
+    if ! safe_route_operation "delete" "default"; then
+        log_warning "Failed to remove default route (may not exist)"
+    fi
+
+    # Step 2: Remove inactive interface from egress group
+    log_info "Removing $inactive_nic from egress interface group"
+    if ! ifconfig "$inactive_nic" -group egress 2>/dev/null; then
+        log_warning "Failed to remove $inactive_nic from egress group"
+    fi
+
+    # Step 3: Add new default route
+    log_info "Adding default route via $egress_gateway"
+    if ! safe_route_operation "add" "default" "$egress_gateway"; then
+        log_error "Failed to add default route via $egress_gateway"
+        return 1
+    fi
+
+    # Step 4: Add active interface to egress group
+    log_info "Adding $active_nic to egress interface group"
+    if ! ifconfig "$active_nic" group egress 2>/dev/null; then
+        log_warning "Failed to add $active_nic to egress group"
+    fi
+
+    # Step 5: Reset PF firewall
+    if [[ -n "${PF_RULE_FILE:-}" && -f "$PF_RULE_FILE" ]]; then
+        log_info "Reloading PF firewall rules from $PF_RULE_FILE"
+        if ! pfctl -g -v -F all -f "$PF_RULE_FILE" >/dev/null 2>&1; then
+            log_warning "Failed to reload PF rules"
+        fi
+    else\n        log_debug "PF rule file not configured or not found: ${PF_RULE_FILE:-not set}"\n    fi\n\n    # Step 6: Update LED status\n    update_led "$led_color"\n\n    # Step 7: Restart dependent services\n    if [[ -n "${SERVICES_TO_RESTART:-}" ]]; then\n        log_info "Restarting services: $SERVICES_TO_RESTART"\n        for service in $SERVICES_TO_RESTART; do\n            restart_service_safely "$service" &\n        done\n        \n        # Wait for background service restarts to complete\n        wait\n    fi\n\n    # Step 8: Update DNS entries if scripts are available\n    if [[ -n "${ROUTE53_SCRIPT:-}" && -x "${ROUTE53_SCRIPT/#\\~/$HOME}" ]]; then\n        log_info "Updating Route53 DNS records"\n        (sudo -u admin "${ROUTE53_SCRIPT/#\\~/$HOME}" . &) || log_warning "Route53 update failed"\n    fi\n\n    if [[ -n "${FIRST_HOP_SCRIPT:-}" && -x "$FIRST_HOP_SCRIPT" ]]; then\n        log_info "Updating first hop DNS entry"\n        ("$FIRST_HOP_SCRIPT" &) || log_warning "First hop update failed"\n    fi\n\n    # Step 9: Send notifications\n    local message="$operation to $active_nic ($(cat "/var/db/${active_nic}_ip" 2>/dev/null || echo "unknown IP")) at $(date)"\n    send_pushover_notification "$message" "high"\n    \n    # Step 10: Verify connectivity\n    sleep 2  # Allow network changes to settle\n    if verify_connectivity "$egress_gateway"; then\n        log_info "$operation completed successfully - connectivity verified"\n    else\n        log_warning "$operation completed but connectivity verification failed"\n    fi\n    \n    # Final LED update to ensure it's set correctly\n    update_led "$led_color"\n    \n    log_info "=== $operation completed ==="
+    return 0
+}
+
+#############################################################################
+# MAIN FAILOVER LOGIC
+#############################################################################
+
+if [[ "$STATUS" == "1" ]]; then
+    # FAILOVER: Switch to backup interface
+    COLOR="${LED_COLOR_FAILOVER:-ea0a8e}"
+    operation="FAILOVER"
+
+    log_critical "NETWORK FAILURE DETECTED - Executing failover from $PRIMARY_NIC to $BACKUP_NIC"
+    log_info "Loss: ${LOSS_AVG:-N/A}%, Latency: ${LATENCY_AVG:-N/A}ms"
+
+    if perform_failover "$BACKUP_NIC" "$PRIMARY_NIC" "Failover" "$COLOR"; then
+        update_status "1" "$PRIMARY_NIC" "$BACKUP_NIC"
+
+        # Block specific IPs to conserve bandwidth on backup connection
+        if [[ -n "${BLOCKED_IPS:-}" ]]; then
+            log_info "Blocking egress for bandwidth conservation: $BLOCKED_IPS"
+            for ip in $BLOCKED_IPS; do
+                if ! pfctl -t nat_approved_wide -T add "!${ip}" 2>/dev/null; then
+                    log_warning "Failed to block IP: $ip"
+                fi
+            done
+        fi
+    else
+        log_critical "FAILOVER FAILED - System may be in inconsistent state"
+        update_led "${LED_COLOR_ERROR:-ff0000}"
+        exit 1
+    fi
+
+elif [[ "$STATUS" == "0" ]]; then
+    # RECOVERY: Return to primary interface
+    COLOR="${LED_COLOR_RECOVERY:-000000}"
+    operation="RECOVERY"
+
+    log_notice "NETWORK RECOVERY DETECTED - Returning to primary interface $PRIMARY_NIC"
+
+    if perform_failover "$PRIMARY_NIC" "$BACKUP_NIC" "Recovery" "$COLOR"; then
+        update_status "0" "$PRIMARY_NIC" "$BACKUP_NIC"
+
+        # Remove bandwidth restrictions
+        if [[ -n "${BLOCKED_IPS:-}" ]]; then
+            log_info "Removing bandwidth restrictions for: $BLOCKED_IPS"
+            for ip in $BLOCKED_IPS; do
+                pfctl -t nat_approved_wide -T delete "!${ip}" 2>/dev/null || true
+            done
+        fi
+    else
+        log_critical "RECOVERY FAILED - System may be in inconsistent state"
+        update_led "${LED_COLOR_ERROR:-ff0000}"
+        exit 1
+    fi
+
+else
+    log_error "UNKNOWN STATUS '$STATUS' - Expected 0 (recovery) or 1 (failure)"
+    exit 1
+fi
+
+# Final status logging
+completion_time="$(date +'%F %T %Z')"
+log_info "=== $operation COMPLETED at $completion_time ==="
+
+# Log to dedicated failover log file
+echo "$(date +'%F %T %Z'): $operation completed successfully - $PRIMARY_NIC/$BACKUP_NIC" >> "${FAILOVER_LOG:-/var/log/network_failover.log}"

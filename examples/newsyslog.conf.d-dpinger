@@ -1,0 +1,26 @@
+# FreeBSD newsyslog.conf.d configuration for dpinger logs
+# Place this file in /usr/local/etc/newsyslog.conf.d/dpinger.conf
+
+# Dpinger monitoring logs - raw metrics data
+# Option A: Size-based rotation (for variable load systems)
+# These logs are high frequency (every second) and can grow quickly
+# 30 × 10MB files = ~300MB total, ~143 days of data
+# /var/log/dpinger_ix0.log        root:wheel    644  30    10000  *     NZ
+# /var/log/dpinger_ix2.log        root:wheel    644  30    10000  *     NZ
+
+# Option B: Time-based rotation (recommended for predictable retention)
+# Daily rotation with 30 day retention = ~63MB total, exactly 30 days
+/var/log/dpinger_ix0.log        root:wheel    644  30    *     @T00   NZ
+/var/log/dpinger_ix2.log        root:wheel    644  30    *     @T00   NZ
+
+# Network failover event log - human readable events
+# Lower frequency but important for troubleshooting, keep longer
+/var/log/network_failover.log   root:wheel    644  30    1000   *     NZ
+
+# Configuration notes:
+# - count 7: Keep 7 rotated files for dpinger (about 3-4 weeks of data)
+# - count 30: Keep 30 rotated files for failover events (longer retention)
+# - size 10000: Rotate at 10MB for high-frequency dpinger logs
+# - size 1000: Rotate at 1MB for lower-frequency failover logs
+# - flags N: Don't signal any process (dpinger handles this gracefully)
+# - flags Z: Compress old logs with gzip to save space

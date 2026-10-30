@@ -1,0 +1,45 @@
+# FreeBSD rc.conf - Network Failover Relevant Configuration
+# Only the settings needed for the dpinger failover system to work
+
+#############################################################################
+# NETWORK INTERFACES FOR FAILOVER
+#############################################################################
+
+# Primary WAN Interface - uses DHCP, part of egress group
+ifconfig_ix0="SYNCDHCP -lro -tso group egress media 10Gbase-T"
+dhclient_wait_if_ix0="60"
+
+# Backup WAN Interface - uses DHCP
+ifconfig_ix2="SYNCDHCP -lro -tso"
+
+# LAN Interface
+ifconfig_ix3="inet 192.168.100.1 netmask 255.255.255.0"
+
+# Aliases for modem management (adjust IPs to match your modems)
+ifconfig_ix0_alias0="inet 192.168.200.2/30"  # Cable modem management
+ifconfig_ix2_alias0="inet 198.51.100.2/24"   # LTE modem management
+
+#############################################################################
+# STATIC ROUTES TO MODEMS
+#############################################################################
+
+static_routes="primary_modem backup_modem"
+route_primary_modem="-net 192.168.200.1/32 -interface ix0"
+route_backup_modem="-net 198.51.100.1/32 -interface ix2"
+
+#############################################################################
+# REQUIRED FOR FAILOVER SYSTEM
+#############################################################################
+
+# Enable routing between interfaces
+gateway_enable="YES"
+
+# PF Firewall (required for egress group and NAT switching)
+pf_enable="YES"
+pf_rules="/etc/pf/pf.simple.conf"
+
+# Services that get restarted during failover
+unbound_enable="YES"
+miniupnpd_enable="YES"
+avahi_daemon_enable="YES"
+dbus_enable="YES"

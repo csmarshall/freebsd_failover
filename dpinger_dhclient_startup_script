@@ -1,63 +1,138 @@
-#!/usr/local/bin/bash -x
-PATH=${PATH}:/usr/local/bin
-SCRIPT="$(basename ${0})"
-LOGGER="/usr/bin/logger -si -p user.notice -t ${SCRIPT}"
+#!/usr/local/bin/bash
+#
+# FreeBSD Network Failover - Dpinger Startup Script
+# Starts dpinger monitoring for network interface connectivity
+# Usage: dpinger_dhclient_startup_script <primary_interface> <backup_interface>
+#
+
+set -euo pipefail
+PATH=${PATH}:/usr/local/bin:/sbin:/usr/sbin
+
+# Load the failover library
+SCRIPT_DIR="$(dirname "$(realpath "$0")")"
+source "${SCRIPT_DIR}/failover-lib.sh"
+
+# Initialize the library
+init_failover_lib
+
+# Parse command line arguments
+if [[ $# -ne 2 ]]; then
+    log_error "Usage: $0 <primary_interface> <backup_interface>"
+    log_error "Example: $0 ix0 ix2"
+    exit 1
+fi
 
 DEFAULT_NIC="${1}"
 BACKUP_NIC="${2}"
-SCRIPT="$(basename ${0})"
-DEFAULT_NIC_IP="$(cat /var/db/${DEFAULT_NIC}_ip)"
-DEFAULT_NIC_GATEWAY="$(cat /tmp/${DEFAULT_NIC}_router)"
+
+# Validate configuration and interfaces
+validate_config || exit 1
+
+# Acquire lock to prevent multiple instances
+acquire_lock 10 || {
+    log_error "Could not acquire lock, another dpinger startup may be running"
+    exit 1
+}
+
+# Read network configuration
+log_info "Reading network configuration for interfaces $DEFAULT_NIC and $BACKUP_NIC"
+
+if ! DEFAULT_NIC_IP="$(cat "/var/db/${DEFAULT_NIC}_ip" 2>/dev/null)"; then
+    log_error "Cannot read IP address for $DEFAULT_NIC from /var/db/${DEFAULT_NIC}_ip"
+    exit 1
+fi
+
+if ! DEFAULT_NIC_GATEWAY="$(cat "/tmp/${DEFAULT_NIC}_router" 2>/dev/null)"; then
+    log_error "Cannot read gateway for $DEFAULT_NIC from /tmp/${DEFAULT_NIC}_router"
+    exit 1
+fi
+
+# Set dpinger file paths
 DPINGER_PIDFILE="/var/run/dpinger_${DEFAULT_NIC}.pid"
 DPINGER_LOGFILE="/var/log/dpinger_${DEFAULT_NIC}.log"
+FAILOVER_SCRIPT="${SCRIPT_DIR}/dpinger_failover_script"
 
-#    -S log warnings via syslog
-#    -P priority scheduling for receive thread (requires root)
-#    -B bind (source) address
-#    -s time interval between echo requests (default 500ms)
-#    -l time interval before packets are treated as lost (default 4x send interval)
-#    -t time period over which results are averaged (default 60s)
-#    -r time interval between reports (default 1s)
-#    -o output file for reports (default stdout)
-#    -A time interval between alerts (default 1s)
-#    -D time threshold for latency alarm (default none)
-#    -L percent threshold for loss alarm (default none)
-#    -C optional command to be invoked via system() for alerts
-#    -i identifier text to include in output
-#    -u unix socket name for polling
-#    -p process id file name
+# Validate that the failover script exists and is executable
+if [[ ! -x "$FAILOVER_SCRIPT" ]]; then
+    log_error "Failover script not found or not executable: $FAILOVER_SCRIPT"
+    exit 1
+fi
 
-
-
-if [[ $(pgrep dpinger &>/dev/null ; echo $?) -eq 0 ]]; then
-    ${LOGGER} "PKilling exsting dpinger"
+# Stop any existing dpinger processes
+if pgrep -q dpinger; then
+    log_notice "Stopping existing dpinger processes"
     pkill dpinger
-    if [[ -s ${DPINGER_PIDFILE} ]]; then
-        ${LOGGER} "Removing existing ${DPINGER_PIDFILE}"
-        rm -v ${DPINGER_PIDFILE}
+
+    # Wait for processes to stop
+    local count=0
+    while pgrep -q dpinger && [[ $count -lt 10 ]]; do
+        sleep 1
+        ((count++))
+    done
+
+    if pgrep -q dpinger; then
+        log_warning "Force killing dpinger processes"
+        pkill -9 dpinger
     fi
 fi
 
-${LOGGER} "Starting dpinger - ${DEFAULT_NIC} - ${DEFAULT_NIC_GATEWAY}"
-
-exec dpinger -i dpinger_${DEFAULT_NIC} \
-    -p ${DPINGER_PIDFILE} \
-    -B ${DEFAULT_NIC_IP} \
-    -P \
-    -S \
-    -C "/etc/dpinger/failover ${DEFAULT_NIC} ${BACKUP_NIC}" \
-    -t 20s \
-    -L 25% \
-    -o ${DPINGER_LOGFILE} \
-    ${DEFAULT_NIC_GATEWAY} &
-
-DPINGER_STARTUP_STATUS=$?
-
-sleep .1
-
-if [[ ${DPINGER_STARTUP_STATUS} -eq 0 ]]; then
-    ${LOGGER} "Started dpinger under PID $(cat ${DPINGER_PIDFILE}) for ${DEFAULT_NIC}"
-else
-    ${LOGGER} "Start dpinger failed for ${DEFAULT_NIC}"        
+# Clean up old PID file
+if [[ -f "${DPINGER_PIDFILE}" ]]; then
+    log_debug "Removing existing PID file: ${DPINGER_PIDFILE}"
+    rm -f "${DPINGER_PIDFILE}"
 fi
 
+log_info "Starting dpinger for $DEFAULT_NIC (IP: $DEFAULT_NIC_IP, Gateway: $DEFAULT_NIC_GATEWAY)"
+
+# Build dpinger command with configuration
+dpinger_cmd=(
+    dpinger
+    -i "dpinger_${DEFAULT_NIC}"
+    -p "${DPINGER_PIDFILE}"
+    -B "${DEFAULT_NIC_IP}"
+    -P  # Priority scheduling
+    -S  # Log to syslog
+    -C "${FAILOVER_SCRIPT} ${DEFAULT_NIC} ${BACKUP_NIC}"
+    -t "${AVERAGING_WINDOW:-20s}"
+    -s "${PING_INTERVAL:-500ms}"
+    -l "${LOSS_TIMEOUT:-2s}"
+    -L "${LOSS_THRESHOLD:-25%}"
+    -A "${ALERT_INTERVAL:-1s}"
+    -o "${DPINGER_LOGFILE}"
+    "${DEFAULT_NIC_GATEWAY}"
+)
+
+log_debug "Executing: ${dpinger_cmd[*]}"
+
+# Start dpinger in background
+"${dpinger_cmd[@]}" &
+DPINGER_PID=$!
+DPINGER_STARTUP_STATUS=$?
+
+# Give dpinger time to initialize
+sleep 0.5
+
+# Verify dpinger started successfully
+if [[ $DPINGER_STARTUP_STATUS -eq 0 ]] && kill -0 "$DPINGER_PID" 2>/dev/null; then
+    # Read PID from pidfile for verification
+    if [[ -f "${DPINGER_PIDFILE}" ]]; then
+        ACTUAL_PID="$(cat "${DPINGER_PIDFILE}")"
+        log_info "Dpinger started successfully (PID: $ACTUAL_PID) for $DEFAULT_NIC"
+        update_status "0" "$DEFAULT_NIC" "$BACKUP_NIC"  # Normal status
+
+        # Verify connectivity
+        if verify_connectivity "$DEFAULT_NIC_GATEWAY"; then
+            log_info "Initial connectivity test passed"
+        else
+            log_warning "Initial connectivity test failed - dpinger will monitor and trigger failover if needed"
+        fi
+    else
+        log_error "Dpinger started but PID file not created: $DPINGER_PIDFILE"
+        exit 1
+    fi
+else
+    log_error "Failed to start dpinger for $DEFAULT_NIC (exit code: $DPINGER_STARTUP_STATUS)"
+    exit 1
+fi
+
+log_info "Dpinger startup completed successfully"

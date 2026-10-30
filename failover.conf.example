@@ -1,0 +1,101 @@
+# FreeBSD Network Failover Configuration - Example
+# Copy this file to failover.conf and customize for your environment
+
+#############################################################################
+# NETWORK INTERFACE CONFIGURATION
+#############################################################################
+
+# Primary network interface (main connection)
+PRIMARY_NIC="ix0"
+
+# Backup network interface (failover connection)
+BACKUP_NIC="ix2"
+
+# LAN interface (optional, for internal network)
+LAN_NIC=""
+
+#############################################################################
+# DPINGER MONITORING CONFIGURATION
+#############################################################################
+
+# Packet loss threshold that triggers failover (percentage)
+LOSS_THRESHOLD="25%"
+
+# Time period over which results are averaged
+AVERAGING_WINDOW="20s"
+
+# Time interval between echo requests
+PING_INTERVAL="500ms"
+
+# Time interval before packets are treated as lost
+LOSS_TIMEOUT="2s"
+
+# Time interval between alerts
+ALERT_INTERVAL="1s"
+
+# Test destination for connectivity verification (optional)
+TEST_DESTINATION="8.8.8.8"
+
+#############################################################################
+# SYSTEM CONFIGURATION
+#############################################################################
+
+# PF firewall configuration file
+PF_RULE_FILE="/etc/pf/pf.simple.conf"
+
+# Services to restart after failover (space-separated)
+SERVICES_TO_RESTART="unbound miniupnpd avahi-daemon"
+
+# IP addresses to block from egress during failover (space-separated)
+# Example: High-bandwidth devices that should be restricted on backup connection
+BLOCKED_IPS="192.168.100.10 192.168.100.20"
+
+# LED control tool path (optional - for blink1 USB LED devices)
+BLINK_TOOL="/usr/local/bin/blink1-tool"
+
+#############################################################################
+# NOTIFICATION CONFIGURATION
+#############################################################################
+
+# Enable/disable pushover notifications (true/false)
+ENABLE_PUSHOVER="true"
+
+# Pushover script path
+PUSHOVER_SCRIPT="/usr/local/bin/pushover_message.sh"
+
+# Route53 update script path (optional - for dynamic DNS updates)
+ROUTE53_SCRIPT="~admin/bin/update-route53.sh"
+
+# First hop entry script path (optional)
+FIRST_HOP_SCRIPT="/usr/local/bin/first_hop_entry.sh"
+
+#############################################################################
+# LOGGING CONFIGURATION
+#############################################################################
+
+# Log level: debug, info, notice, warning, error, critical
+LOG_LEVEL="notice"
+
+# Additional log file for failover events
+FAILOVER_LOG="/var/log/network_failover.log"
+
+#############################################################################
+# ADVANCED CONFIGURATION
+#############################################################################
+
+# Timeout for service restarts (seconds)
+SERVICE_RESTART_TIMEOUT="30"
+
+# Enable network state backup for rollback (true/false)
+ENABLE_ROLLBACK="true"
+
+# Maximum number of concurrent failover operations
+MAX_CONCURRENT_FAILOVERS="1"
+
+# Connectivity test timeout (milliseconds)
+CONNECTIVITY_TEST_TIMEOUT="2000"
+
+# LED colors for different states (hex color codes)
+LED_COLOR_FAILOVER="ea0a8e"  # Pink for failover state
+LED_COLOR_RECOVERY="000000"  # Black for normal state
+LED_COLOR_ERROR="ff0000"     # Red for error state
