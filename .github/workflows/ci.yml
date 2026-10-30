@@ -1,0 +1,40 @@
+name: ci
+
+on:
+  push:
+    branches: [mainline]
+  pull_request:
+
+jobs:
+  lint-and-leaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Leak scan (generic rules; the private map never leaves the owner's machine)
+        run: python3 scripts/leak_scan.py .
+      - name: Shell syntax
+        run: |
+          set -eu
+          for f in $(git ls-files 'scripts/*.sh' 'tests/*.sh' 'router/**' | grep -v '\.conf$\|cron\.d'); do
+            if head -1 "$f" | grep -q 'bash'; then bash -n "$f"; else sh -n "$f"; fi
+            echo "ok $f"
+          done
+      - name: shellcheck (errors only)
+        run: |
+          sudo apt-get install -y -qq shellcheck >/dev/null
+          git ls-files 'scripts/*.sh' 'tests/*.sh' 'router/usr/local/sbin/*' 'router/usr/local/libexec/*' \
+            | xargs shellcheck -S error -s bash -e SC1090,SC1091
+
+  tests-freebsd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hook and controller tests on FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg install -y bash
+          run: |
+            set -e
+            sh tests/test_hooks.sh
+            sh tests/test_failover.sh

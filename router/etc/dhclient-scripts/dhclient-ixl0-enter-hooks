@@ -1,0 +1,5 @@
+# ATT primary WAN (ixl0) enter hook. Sourced (POSIX sh) by
+# /etc/dhclient-enter-hooks inside /sbin/dhclient-script.
+wan_role=att
+wan_fib=1
+. /etc/dhclient-scripts/wan-lib.sh

@@ -5,14 +5,14 @@ PID="$$"
 # FAIL
 # Oct  7 23:41:47 kong /etc/dpinger/failover[61064]: /etc/dpinger/failover
 # Oct  7 23:41:47 kong /etc/dpinger/failover[61065]: 1 igb0
-# Oct  7 23:41:47 kong /etc/dpinger/failover[61066]: 2 24.13.224.1
+# Oct  7 23:41:47 kong /etc/dpinger/failover[61066]: 2 198.51.100.1
 # Oct  7 23:41:47 kong /etc/dpinger/failover[61067]: 3 1
 # Oct  7 23:41:48 kong /etc/dpinger/failover[61068]: 4 10288
 # Oct  7 23:41:48 kong /etc/dpinger/failover[61069]: 5 1644
 # SUCCEED
 # Oct  7 23:42:21 kong /etc/dpinger/failover[62252]: /etc/dpinger/failover
 # Oct  7 23:42:21 kong /etc/dpinger/failover[62253]: 1 igb0
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62254]: 2 24.13.224.1
+# Oct  7 23:42:21 kong /etc/dpinger/failover[62254]: 2 198.51.100.1
 # Oct  7 23:42:21 kong /etc/dpinger/failover[62255]: 3 0
 # Oct  7 23:42:21 kong /etc/dpinger/failover[62256]: 4 10034
 # Oct  7 23:42:21 kong /etc/dpinger/failover[62257]: 5 2391
@@ -35,7 +35,7 @@ START_DEFAULT_ROUTE="$(netstat -rn | grep default | sed 's/ \{1,\}/ /g')"
 # PF Ruleset
 PF_RULE_FILE="/etc/pf/pf.simple.conf"
 # Hosts to prevent from egress when failed over
-IPS_TO_BLOCK_FROM_EGRESS="192.168.1.6"
+IPS_TO_BLOCK_FROM_EGRESS="192.168.100.6"
 #DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound netdata smokeping miniupnpd avahi-daemon"
 DAEMONS_TO_RESTART_ON_FW_CHANGE="unbound miniupnpd avahi-daemon"
 
@@ -81,7 +81,7 @@ function failover() {
 
     # Update route53
     ${LOGGER} "Updating Route53"
-    sudo -u charles ~charles/bin/update-route53.sh .
+    sudo -u admin ~admin/bin/update-route53.sh .
 
     # Update first hop host entry:
     ${LOGGER} "Updating FirstHop DNS entry"

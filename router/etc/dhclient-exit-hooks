@@ -1,0 +1,8 @@
+# Sourced (POSIX sh) by /sbin/dhclient-script on exit; $LOGGER comes from it.
+$LOGGER "$interface: $reason"
+printf 'search home.example.com. example.com.\nnameserver 127.0.0.1\n' | resolvconf -a "${interface}"
+env | sed -e 's/new_//g' > "/etc/dhclient_status_${interface}"
+
+if [ -r "/etc/dhclient-scripts/dhclient-${interface}-exit-hooks" ]; then
+	. "/etc/dhclient-scripts/dhclient-${interface}-exit-hooks"
+fi

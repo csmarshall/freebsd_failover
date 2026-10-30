@@ -1,0 +1,5 @@
+# TMO backup WAN (ix0, Teltonika 5G) enter hook. Sourced (POSIX sh) by
+# /etc/dhclient-enter-hooks inside /sbin/dhclient-script.
+wan_role=tmo
+wan_fib=2
+. /etc/dhclient-scripts/wan-lib.sh

@@ -1,0 +1,11 @@
+# TMO backup WAN (ix0, Teltonika 5G) exit hook. Sourced (POSIX sh) by
+# /etc/dhclient-exit-hooks inside /sbin/dhclient-script. Never `exit` here:
+# that would replace dhclient-script's own exit status.
+
+type wan_exit >/dev/null 2>&1 || return 0
+wan_exit
+
+# gateway-tmobile/backup kept as aliases until smokeping's config is renamed.
+/etc/dhclient-scripts/set_gateway_entries.sh "$(wan_first_router)" \
+    "gateway-tmo.localhost gateway-tmobile.localhost gateway-backup.localhost" \
+    allow-private
