@@ -1,0 +1,14 @@
+#!/bin/sh
+# Smokeping TraceroutePing "binaryv6" for BACKUP's first hop. the 5G carrier's
+# routers don't answer echo, only hop-limit-exceeded, and hop 2 is two
+# load-balanced gateways (two carrier-internal fc00::/7 addresses) that
+# swap per packet. TraceroutePing only counts a reply whose address equals
+# the target's `host`, so this reports every responder at hop N as the
+# stand-in address ::N. Config: host = ::2, minttl = maxttl = 2.
+#
+# Runs traceroute6 in FIB 2 (BACKUP) from ix0's newest usable global address;
+# the 5G carrier rotates the /64, so it is looked up on every run.
+src=$(ifconfig ix0 inet6 | awk '$1 == "inet6" && $2 ~ /^2/ && !/deprecated/ { a = $2 } END { print a }')
+[ -n "$src" ] || { echo "traceroute6-bak: ix0 has no usable global IPv6 address" >&2; exit 1; }
+/usr/sbin/setfib 2 /usr/sbin/traceroute6 -s "$src" "$@" |
+	awk '$1 ~ /^[0-9]+$/ && $2 ~ /:/ { $2 = "::" $1 } { print; fflush() }'
