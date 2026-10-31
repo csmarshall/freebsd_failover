@@ -21,7 +21,11 @@ jobs:
           [ -n "$files" ] || { echo "no files to check"; exit 1; }
           n=0
           for f in $files; do
-            if head -1 "$f" | grep -q 'bash'; then bash -n "$f"; else sh -n "$f"; fi
+            case "$(head -1 "$f")" in
+            '#!'*python*) echo "skip (python) $f"; python3 -m py_compile "$f"; continue ;;
+            *bash*) bash -n "$f" ;;
+            *) sh -n "$f" ;;
+            esac
             echo "ok $f"; n=$((n + 1))
           done
           echo "checked $n files"
@@ -35,7 +39,7 @@ jobs:
             'router/usr/local/etc/rc.d/*')
           [ -n "$files" ] || { echo "no files to check"; exit 1; }
           for f in $files; do
-            case "$(head -1 "$f")" in *bash*) s=bash ;; *) s=sh ;; esac
+            case "$(head -1 "$f")" in '#!'*python*) continue ;; *bash*) s=bash ;; *) s=sh ;; esac
             shellcheck -S error -e SC1090,SC1091 -s "$s" "$f"
             echo "ok ($s) $f"
           done
