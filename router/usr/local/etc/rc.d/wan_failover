@@ -4,8 +4,8 @@
 # REQUIRE: NETWORKING pf
 # KEYWORD: shutdown
 #
-# ATT/TMO WAN failover: starts the four dpinger probes (FIB 1 = ATT,
-# FIB 2 = TMO) and one delayed evaluate. See /usr/local/sbin/wan-failover.
+# PRIMARY/BACKUP WAN failover: starts the four dpinger probes (FIB 1 = PRIMARY,
+# FIB 2 = BACKUP) and one delayed evaluate. See /usr/local/sbin/wan-failover.
 #
 # wan_failover_enable (bool): Set to "YES" to enable. Default "NO".
 

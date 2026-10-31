@@ -1,8 +1,8 @@
 # /etc/dhclient-scripts/wan-lib.sh
 #
-# Shared by the ATT (ixl0) and TMO (ix0) dhclient hooks. Sourced (POSIX sh)
+# Shared by the PRIMARY (ixl0) and BACKUP (ix0) dhclient hooks. Sourced (POSIX sh)
 # into /sbin/dhclient-script by the per-interface enter hook, which sets
-# wan_role (att|tmo) and wan_fib (1|2) first.
+# wan_role (pri|bak) and wan_fib (1|2) first.
 #
 # Invariant: FIB 0's default route belongs to /usr/local/sbin/wan-failover.
 # A WAN's dhclient may touch FIB 0 only while the failover state names that
@@ -12,7 +12,7 @@
 : "${WAN_DB_DIR:=/var/db}"
 : "${WAN_FAILOVER:=/usr/local/sbin/wan-failover}"
 : "${WAN_PFCTL:=/sbin/pfctl}"
-WAN_DEFAULT_ROLE=att
+WAN_DEFAULT_ROLE=pri
 
 wan_active_role() {
 	if [ -s "$WAN_STATE_FILE" ]; then
@@ -33,7 +33,7 @@ is_default_interface() {
 # Overrides dhclient-script's add_new_address, which runs `ifconfig <if> inet
 # <addr>` without `alias` and so REPLACES the interface's first address. After
 # a lease change that first address is the rc.conf management alias
-# (192.168.11.2 on ixl0 for the WAS-110, 192.168.12.2 on ix0 for the TRB), so
+# (192.168.11.2 on ixl0 for the ONT, 192.168.12.2 on ix0 for the CPE), so
 # the stock code would delete it. Adding as an alias leaves those to rc.conf;
 # delete_old_address still removes only the old lease address.
 add_new_address() {
@@ -79,13 +79,13 @@ wan_pf_set_addr() {
 	fi
 }
 
-# TMO only (ATT IPv6 belongs to dhcp6c): point FIB 2's IPv6 default at the
-# TRB. ix0 is no_radr, so the kernel never records the RA's router; ask the
+# BACKUP only (PRIMARY IPv6 belongs to dhcp6c): point FIB 2's IPv6 default at the
+# CPE. ix0 is no_radr, so the kernel never records the RA's router; ask the
 # all-routers group instead and take the first link-local that answers, so
-# a replaced TRB is picked up on the next lease. Backgrounded: the ping can
+# a replaced CPE is picked up on the next lease. Backgrounded: the ping can
 # take a few seconds and dhclient-script waits for its hooks.
 wan_fib_set_default6() {
-	[ "$wan_role" = tmo ] || return 0
+	[ "$wan_role" = bak ] || return 0
 	(
 		_r6=$(ping -6 -c 2 -t 3 "ff02::2%$interface" 2>/dev/null |
 			awk '/bytes from fe80:/ && !r { r = $4; sub(/,$/, "", r) } END { print r }')

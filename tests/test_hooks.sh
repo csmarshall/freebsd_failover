@@ -69,8 +69,8 @@ EOF
 	sh "$_t/run" > "$_t/out" 2>&1
 	cat "$_t/out"
 	cat "$_t/calls" 2>/dev/null
-	[ -f "$_t/tmo_router" ] && echo "db tmo_router=$(cat "$_t/tmo_router")"
-	[ -f "$_t/att_router" ] && echo "db att_router=$(cat "$_t/att_router")"
+	[ -f "$_t/bak_router" ] && echo "db bak_router=$(cat "$_t/bak_router")"
+	[ -f "$_t/pri_router" ] && echo "db pri_router=$(cat "$_t/pri_router")"
 	rm -rf "$_t"
 }
 
@@ -79,50 +79,50 @@ lacks() { ! has "$1" "$2"; }
 
 # is_default_interface ownership
 o=$(run_case ixl0 - - BOUND yes 'is_default_interface && echo OWNER || echo NOT')
-check "att owns FIB 0 when no state file" has "$o" '^OWNER$'
+check "pri owns FIB 0 when no state file" has "$o" '^OWNER$'
 o=$(run_case ix0 - - BOUND yes 'is_default_interface && echo OWNER || echo NOT')
-check "tmo does not own FIB 0 when no state file" has "$o" '^NOT$'
-o=$(run_case ixl0 tmo ix0 BOUND yes 'is_default_interface && echo OWNER || echo NOT')
-check "att does not own FIB 0 when state=tmo" has "$o" '^NOT$'
-o=$(run_case ix0 tmo ix0 BOUND yes 'is_default_interface && echo OWNER || echo NOT')
-check "tmo owns FIB 0 when state=tmo" has "$o" '^OWNER$'
+check "bak does not own FIB 0 when no state file" has "$o" '^NOT$'
+o=$(run_case ixl0 bak ix0 BOUND yes 'is_default_interface && echo OWNER || echo NOT')
+check "pri does not own FIB 0 when state=bak" has "$o" '^NOT$'
+o=$(run_case ix0 bak ix0 BOUND yes 'is_default_interface && echo OWNER || echo NOT')
+check "bak owns FIB 0 when state=bak" has "$o" '^OWNER$'
 
 # Stock add_new_routes during a primary outage (no default route anywhere)
 o=$(run_case ix0 - - BOUND yes 'add_new_routes')
-check "with our hooks: tmo lease during outage adds NO FIB 0 default" lacks "$o" '^route add default'
+check "with our hooks: bak lease during outage adds NO FIB 0 default" lacks "$o" '^route add default'
 o=$(run_case ix0 - - BOUND no 'add_new_routes')
-check "known-bad (stock, no hooks): tmo lease during outage DOES add FIB 0 default" has "$o" '^route add default 192.0.2.1'
+check "known-bad (stock, no hooks): bak lease during outage DOES add FIB 0 default" has "$o" '^route add default 192.0.2.1'
 o=$(run_case ixl0 - ixl0 BOUND yes 'add_new_routes')
-check "att in normal state still installs FIB 0 default" has "$o" '^route add default 192.0.2.1'
+check "pri in normal state still installs FIB 0 default" has "$o" '^route add default 192.0.2.1'
 
 # wan_exit: probe FIB maintenance
 o=$(run_case ix0 - - BOUND yes 'wan_exit')
-check "tmo BOUND sets FIB 2 gateway host route" has "$o" 'add -fib 2 -host 192.0.2.1 -interface ix0'
-check "tmo BOUND sets FIB 2 default" has "$o" 'add -fib 2 default 192.0.2.1'
-check "tmo BOUND records router" has "$o" '^db tmo_router=192.0.2.1$'
-check "tmo BOUND never touches a route without -fib" lacks "$o" '^route -n add default'
+check "bak BOUND sets FIB 2 gateway host route" has "$o" 'add -fib 2 -host 192.0.2.1 -interface ix0'
+check "bak BOUND sets FIB 2 default" has "$o" 'add -fib 2 default 192.0.2.1'
+check "bak BOUND records router" has "$o" '^db bak_router=192.0.2.1$'
+check "bak BOUND never touches a route without -fib" lacks "$o" '^route -n add default'
 o=$(run_case ixl0 - ixl0 RENEW yes 'wan_exit')
-check "att RENEW sets FIB 1 default" has "$o" 'add -fib 1 default 192.0.2.1'
+check "pri RENEW sets FIB 1 default" has "$o" 'add -fib 1 default 192.0.2.1'
 o=$(run_case ix0 - - EXPIRE yes 'wan_exit')
-check "tmo EXPIRE removes FIB 2 default" has "$o" 'delete -fib 2 default'
+check "bak EXPIRE removes FIB 2 default" has "$o" 'delete -fib 2 default'
 
-# pf NAT tables follow the lease (pf.conf NATs to <att_addr>/<tmo_addr>, not
+# pf NAT tables follow the lease (pf.conf NATs to <pri_addr>/<bak_addr>, not
 # (if:0), because the rc.conf mgmt alias can be the first address after boot).
 o=$(run_case ix0 - - BOUND yes 'wan_exit')
-check "tmo BOUND sets pf table tmo_addr to the lease address" has "$o" '^pfctl -q -t tmo_addr -T replace 192.0.2.50$'
+check "bak BOUND sets pf table bak_addr to the lease address" has "$o" '^pfctl -q -t bak_addr -T replace 192.0.2.50$'
 o=$(run_case ixl0 - ixl0 REBOOT yes 'wan_exit')
-check "att REBOOT sets pf table att_addr to the lease address" has "$o" '^pfctl -q -t att_addr -T replace 192.0.2.50$'
+check "pri REBOOT sets pf table pri_addr to the lease address" has "$o" '^pfctl -q -t pri_addr -T replace 192.0.2.50$'
 o=$(run_case ix0 - - EXPIRE yes 'wan_exit')
-check "tmo EXPIRE leaves the pf table alone" lacks "$o" '^pfctl'
+check "bak EXPIRE leaves the pf table alone" lacks "$o" '^pfctl'
 
-# TMO's IPv6 default in FIB 2 follows the TRB's router address, found by
+# BACKUP's IPv6 default in FIB 2 follows the CPE's router address, found by
 # pinging all-routers (ff02::2) on ix0; the hooks never hard-code it.
 o=$(export PING_REPLY="fe80::1:2%ix0"; run_case ix0 - - BOUND yes 'wan_exit; wait')
-check "tmo BOUND sets FIB 2 IPv6 default via the discovered router" has "$o" '^route -6 -n add -fib 2 default fe80::1:2%ix0$'
+check "bak BOUND sets FIB 2 IPv6 default via the discovered router" has "$o" '^route -6 -n add -fib 2 default fe80::1:2%ix0$'
 o=$(run_case ix0 - - BOUND yes 'wan_exit; wait')
-check "tmo BOUND with no router reply leaves FIB 2 IPv6 alone" lacks "$o" '^route -6'
+check "bak BOUND with no router reply leaves FIB 2 IPv6 alone" lacks "$o" '^route -6'
 o=$(export PING_REPLY="fe80::1:2%ixl0"; run_case ixl0 - ixl0 BOUND yes 'wan_exit; wait')
-check "att BOUND never touches IPv6 routes (dhcp6c owns ATT IPv6)" lacks "$o" '^route -6'
+check "pri BOUND never touches IPv6 routes (dhcp6c owns PRIMARY IPv6)" lacks "$o" '^route -6'
 
 # Lease addresses are added as aliases so rc.conf management aliases survive.
 for i in ixl0 ix0; do
@@ -135,10 +135,10 @@ check "known-bad (stock): lease address replaces first address (no alias)" stock
 o=$(run_case ix0 - - BOUND yes 'old_ip_address=192.0.2.40; delete_old_address')
 check "delete_old_address removes only the old lease address" has "$o" '^ifconfig ix0 inet -alias 192.0.2.40'
 
-# WAS-110 management path is rc.conf-owned; no DHCP event may touch it.
+# ONT management path is rc.conf-owned; no DHCP event may touch it.
 for r in BOUND RENEW REBOOT EXPIRE FAIL; do
 	o=$(run_case ixl0 - ixl0 "$r" yes '. "$(dirname "$WAN_STATE_FILE")/exit"')
-	check "att $r leaves 192.168.11.x routes/aliases alone" lacks "$o" '192\.168\.11\.'
+	check "pri $r leaves 192.168.11.x routes/aliases alone" lacks "$o" '192\.168\.11\.'
 done
 
 echo "passed=$passes failed=$fails"

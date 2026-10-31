@@ -1,8 +1,8 @@
-# ATT primary WAN (ixl0) exit hook. Sourced (POSIX sh) by
+# PRIMARY primary WAN (ixl0) exit hook. Sourced (POSIX sh) by
 # /etc/dhclient-exit-hooks inside /sbin/dhclient-script. Never `exit` here:
 # that would replace dhclient-script's own exit status.
 #
-# WAS-110 management (192.168.11.2/24 alias, static route to 192.168.11.1) is
+# ONT management (192.168.11.2/24 alias, static route to 192.168.11.1) is
 # owned by rc.conf only and deliberately NOT touched here, so a DHCP problem
 # can never take away the path to the ONT's UI.
 
@@ -10,4 +10,4 @@ type wan_exit >/dev/null 2>&1 || return 0
 wan_exit
 
 /etc/dhclient-scripts/set_gateway_entries.sh "$(wan_first_router)" \
-    "gateway-att.localhost gateway.localhost"
+    "gateway-pri.localhost gateway.localhost"

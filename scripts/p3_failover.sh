@@ -1,7 +1,7 @@
 #!/usr/local/bin/bash
 # P3: install the WAN failover controller (/usr/local/sbin/wan-failover), its
 # rc.d service and the every-minute cron safety net; start the four dpinger
-# probes and check the controller sees both uplinks healthy and stays on ATT.
+# probes and check the controller sees both uplinks healthy and stays on PRIMARY.
 # Does NOT exercise a failover: that is the P6 test with you at the box.
 unset TMOUT
 set -euo pipefail
@@ -22,7 +22,7 @@ declare -A FILES=(
 	[/usr/local/etc/rc.d/wan_failover]=0555
 	[/etc/cron.d/wan-failover]=0644
 )
-SOCKS=(att_cf att_gg tmo_cf tmo_gg)
+SOCKS=(pri_cf pri_gg bak_cf bak_gg)
 
 hr "tests"
 sh "$REPO/tests/test_hooks.sh" >/dev/null || die "hook tests failed"
@@ -37,7 +37,7 @@ for live in "${!FILES[@]}"; do
 	hr "$live"; show_diff "$live" "$REPO/router${live}"
 done
 
-for f in /var/db/att_ip /var/db/tmo_ip /var/db/att_router /var/db/tmo_router; do
+for f in /var/db/pri_ip /var/db/bak_ip /var/db/pri_router /var/db/bak_router; do
 	[[ -s $f ]] || die "$f missing or empty; the controller needs it"
 done
 hr "commands 'service wan_failover start' will run"
@@ -50,7 +50,7 @@ fi
 
 FIB0_BEFORE="$(route -n get default | grep -E 'gateway|interface' | tr -s ' ')"
 backup p3
-if [[ $(pgrep -f 'dpinger .*-i (att|tmo)_' | wc -l) -gt 0 ]]; then
+if [[ $(pgrep -f 'dpinger .*-i (pri|bak)_' | wc -l) -gt 0 ]]; then
 	say "stopping the running wan_failover probes (re-apply)"
 	service wan_failover onestop
 fi
@@ -93,14 +93,14 @@ for _ in $(seq 1 90); do
 done
 echo "  evaluate: $verdict"
 case $verdict in
-*"att=up tmo=up -> stay att-up"*) pass "controller: both uplinks up, staying on ATT" ;;
+*"pri=up bak=up -> stay pri-up"*) pass "controller: both uplinks up, staying on PRIMARY" ;;
 *"-> stay"*) fail "controller stays but not both up: $verdict" ;;
 *) fail "controller did not decide to stay: $verdict" ;;
 esac
 $CTL status
 
-state="$(cat /var/run/wan_state 2>/dev/null || echo att)"
-if [[ $state == att ]]; then pass "wan_state = att"; else fail "wan_state = $state"; fi
+state="$(cat /var/run/wan_state 2>/dev/null || echo pri)"
+if [[ $state == pri ]]; then pass "wan_state = pri"; else fail "wan_state = $state"; fi
 FIB0_AFTER="$(route -n get default | grep -E 'gateway|interface' | tr -s ' ')"
 if [[ $FIB0_BEFORE == "$FIB0_AFTER" ]]; then pass "FIB 0 default unchanged"; else fail "FIB 0 default changed"; fi
 echo "$FIB0_AFTER"

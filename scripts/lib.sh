@@ -11,7 +11,7 @@ BACKUP_PATHS=(
 	/etc/dhclient.conf /etc/dhclient-enter-hooks /etc/dhclient-exit-hooks /etc/dhclient-scripts
 	/etc/dpinger
 	/usr/local/sbin/wan-failover /usr/local/etc/rc.d/wan_failover /etc/cron.d/wan-failover
-	/usr/local/etc/smokeping/config /usr/local/libexec/fping-att /usr/local/libexec/fping-tmo /usr/local/libexec/traceroute6-tmo
+	/usr/local/etc/smokeping/config /usr/local/libexec/fping-pri /usr/local/libexec/fping-bak /usr/local/libexec/traceroute6-bak
 )
 
 say()  { printf '[%s] %s\n' "$(date +%T)" "$*"; }

@@ -1,7 +1,7 @@
 #!/usr/local/bin/bash
 # P0: back up, stop the non-functional dpinger, strip legacy ix0 config,
 # and stop ix0 from ever installing an IPv6 default router.
-# Safe while ix0 is unplugged; no change to ATT (ixl0) traffic.
+# Safe while ix0 is unplugged; no change to PRIMARY (ixl0) traffic.
 unset TMOUT
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -20,19 +20,19 @@ trap 'rm -rf "$STAGE"' EXIT
 
 # rc.conf candidate (sysrc on a copy, never the live file in dry run)
 cp /etc/rc.conf "$STAGE/rc.conf"
-# media autoselect: the Teltonika port is not 10GBASE-T; the old forced
+# media autoselect: the 5G CPE port is not 10GBASE-T; the old forced
 # "media 10Gbase-T" would give no link at 1G/2.5G.
 sysrc -q -f "$STAGE/rc.conf" ifconfig_ix0="DHCP -lro -tso -tso4 -tso6 -vlanhwtso" >/dev/null
-# no_radr: take a SLAAC address from TMO but never a default router into
+# no_radr: take a SLAAC address from BACKUP but never a default router into
 # FIB 0 (net.inet6.ip6.rfc6204w3=1 is global, so RAs are honoured on ix0).
 sysrc -q -f "$STAGE/rc.conf" ifconfig_ix0_ipv6="inet6 accept_rtadv no_radr" >/dev/null
-sysrc -q -f "$STAGE/rc.conf" static_routes="was110admin" >/dev/null
+sysrc -q -f "$STAGE/rc.conf" static_routes="ontadmin" >/dev/null
 sysrc -q -f "$STAGE/rc.conf" -x ifconfig_ix0_alias0 route_ltemodem >/dev/null 2>&1 || true
 sed -i '' \
-	-e 's|^# BACKUP WAN: ix0 (10G RJ45) - T-Mobile$|# BACKUP WAN: ix0 (10G RJ45) - TMO: Teltonika 5G, NAT mode 192.168.12.0/24, carrier CGNAT|' \
+	-e 's|^# BACKUP WAN: ix0 (10G RJ45) - the 5G carrier$|# BACKUP WAN: ix0 (10G RJ45) - BACKUP: 5G CPE 5G, NAT mode 192.168.12.0/24, carrier CGNAT|' \
 	-e 's|^# Add to egress group only when implementing proper failover with gateway monitor$|# Failover: FIB 0 default is owned by wan-failover; ix0 dhclient maintains FIB 2 only|' \
 	-e '/^# Modem management aliases (for backup WAN access)$/d' \
-	-e '/^# T-Mobile modem management (backup WAN)$/d' \
+	-e '/^# the 5G carrier modem management (backup WAN)$/d' \
 	"$STAGE/rc.conf"
 
 sed 's|^/etc/dpinger/start_dpinger.sh|# P0 '"$TS"': disabled, replaced by wan_failover (P3): &|' \
@@ -41,7 +41,7 @@ sed 's|^/etc/dpinger/start_dpinger.sh|# P0 '"$TS"': disabled, replaced by wan_fa
 hr "rc.conf"; show_diff /etc/rc.conf "$STAGE/rc.conf"
 hr "rc.local"; show_diff /etc/rc.local "$STAGE/rc.local"
 
-ARCHIVE=(failover failover_comcast start_dpinger.sh start_dpinger_backup.sh startup_script)
+ARCHIVE=(failover failover_oldisp start_dpinger.sh start_dpinger_backup.sh startup_script)
 hr "runtime steps"
 cat <<EOF
 - stop dpinger (pid $(cat /var/run/dpinger_ixl0.pid 2>/dev/null || echo none))

@@ -1,8 +1,8 @@
 #!/usr/local/bin/bash
 # Usage: set_gateway_entries.sh <gateway-ip> "<name> [name...]" [allow-private]
 # Points /etc/hosts names (used by smokeping) at a WAN gateway. RFC1918 and
-# loopback gateways are refused unless allow-private is given (TMO's gateway
-# is the Teltonika at 192.168.12.1).
+# loopback gateways are refused unless allow-private is given (BACKUP's gateway
+# is the 5G CPE at 192.168.12.1).
 new_routers="${1}"
 NAMES="${2}"
 ALLOW_PRIVATE="${3:-}"

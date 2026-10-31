@@ -3,19 +3,19 @@ PATH=${PATH}:/sbin:/usr/bin:/usr/local/bin
 PID="$$"
 
 # FAIL
-# Oct  7 23:41:47 kong /etc/dpinger/failover[61064]: /etc/dpinger/failover
-# Oct  7 23:41:47 kong /etc/dpinger/failover[61065]: 1 igb0
-# Oct  7 23:41:47 kong /etc/dpinger/failover[61066]: 2 198.51.100.1
-# Oct  7 23:41:47 kong /etc/dpinger/failover[61067]: 3 1
-# Oct  7 23:41:48 kong /etc/dpinger/failover[61068]: 4 10288
-# Oct  7 23:41:48 kong /etc/dpinger/failover[61069]: 5 1644
+# Oct  7 23:41:47 oldrouter /etc/dpinger/failover[61064]: /etc/dpinger/failover
+# Oct  7 23:41:47 oldrouter /etc/dpinger/failover[61065]: 1 igb0
+# Oct  7 23:41:47 oldrouter /etc/dpinger/failover[61066]: 2 198.51.100.1
+# Oct  7 23:41:47 oldrouter /etc/dpinger/failover[61067]: 3 1
+# Oct  7 23:41:48 oldrouter /etc/dpinger/failover[61068]: 4 10288
+# Oct  7 23:41:48 oldrouter /etc/dpinger/failover[61069]: 5 1644
 # SUCCEED
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62252]: /etc/dpinger/failover
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62253]: 1 igb0
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62254]: 2 198.51.100.1
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62255]: 3 0
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62256]: 4 10034
-# Oct  7 23:42:21 kong /etc/dpinger/failover[62257]: 5 2391
+# Oct  7 23:42:21 oldrouter /etc/dpinger/failover[62252]: /etc/dpinger/failover
+# Oct  7 23:42:21 oldrouter /etc/dpinger/failover[62253]: 1 igb0
+# Oct  7 23:42:21 oldrouter /etc/dpinger/failover[62254]: 2 198.51.100.1
+# Oct  7 23:42:21 oldrouter /etc/dpinger/failover[62255]: 3 0
+# Oct  7 23:42:21 oldrouter /etc/dpinger/failover[62256]: 4 10034
+# Oct  7 23:42:21 oldrouter /etc/dpinger/failover[62257]: 5 2391
 
 BLINK="/usr/local/bin/blink1-tool"
 LOGGER="/usr/bin/logger -s -p user.notice -t ${0}[$PID]"

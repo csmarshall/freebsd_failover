@@ -1,14 +1,14 @@
 #!/bin/sh
-# Smokeping FPing "binary" that probes through one uplink's own FIB, so ATT
-# and TMO are both graphed whichever one is carrying traffic (FIB 0).
-# Installed twice, as fping-att (FIB 1) and fping-tmo (FIB 2); the name
+# Smokeping FPing "binary" that probes through one uplink's own FIB, so PRIMARY
+# and BACKUP are both graphed whichever one is carrying traffic (FIB 0).
+# Installed twice, as fping-pri (FIB 1) and fping-bak (FIB 2); the name
 # picks the uplink. Binds the uplink's current DHCP address (source address
 # selection in FIB 1/2 could otherwise pick the rc.conf management alias).
 # Targets must be IP literals: FIB 1/2 have no lo0 route, so names fail.
 case ${0##*/} in
-fping-att) fib=1 role=att ;;
-fping-tmo) fib=2 role=tmo ;;
-*) echo "fping-uplink: install as fping-att or fping-tmo" >&2; exit 2 ;;
+fping-pri) fib=1 role=pri ;;
+fping-bak) fib=2 role=bak ;;
+*) echo "fping-uplink: install as fping-pri or fping-bak" >&2; exit 2 ;;
 esac
 src=$(cat "/var/db/${role}_ip" 2>/dev/null)
 exec /usr/sbin/setfib "$fib" /usr/local/sbin/fping ${src:+-S "$src"} "$@"

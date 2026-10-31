@@ -1,10 +1,10 @@
 #!/usr/local/bin/bash
-# P3 panic button: stop the WAN failover controller and put router back on ATT
+# P3 panic button: stop the WAN failover controller and put router back on PRIMARY
 # by hand. Uses nothing from the controller itself, so it works even if
 # wan-failover is broken. Leaves pf, the dhclient hooks and FIBs 1/2 alone
 # (P1/P2, which are verified). Safe to run more than once.
 #
-#   sudo ./scripts/p3_panic.sh              stop + disable, force ATT
+#   sudo ./scripts/p3_panic.sh              stop + disable, force PRIMARY
 #   sudo ./scripts/p3_panic.sh --uninstall  also delete the P3 files
 unset TMOUT
 set -uo pipefail   # no -e: do every step even if one fails
@@ -17,19 +17,19 @@ case "${1:-}" in ""|--uninstall) ;; *) echo "usage: sudo $0 [--uninstall]" >&2; 
 rm -f /etc/cron.d/wan-failover && say "removed cron entry"
 sysrc -q wan_failover_enable=NO >/dev/null && say "rc.conf: wan_failover_enable=NO (stays off after reboot)"
 service wan_failover onestop >/dev/null 2>&1
-pkill -f 'dpinger .*-i (att|tmo)_' && say "killed dpinger probes"
+pkill -f 'dpinger .*-i (pri|bak)_' && say "killed dpinger probes"
 pkill -f 'wan-failover' 2>/dev/null
-rm -f /var/run/dpinger_{att,tmo}_*.{sock,pid}
+rm -f /var/run/dpinger_{pri,bak}_*.{sock,pid}
 
-# 2. Back to ATT: state file gone (= att) so the ATT dhclient owns FIB 0 again.
-rm -f /var/run/wan_state /var/run/wan_att_ok_since /var/run/wan_last_change
-att_gw="$(cat /var/db/att_router 2>/dev/null)"
-att_gw="${att_gw:-203.0.113.1}"
-route -n add -fib 0 default "$att_gw" >/dev/null 2>&1 ||
-	route -n change -fib 0 default "$att_gw" >/dev/null 2>&1
-say "FIB 0 default -> $att_gw (ixl0)"
+# 2. Back to PRIMARY: state file gone (= pri) so the PRIMARY dhclient owns FIB 0 again.
+rm -f /var/run/wan_state /var/run/wan_pri_ok_since /var/run/wan_last_change
+pri_gw="$(cat /var/db/pri_router 2>/dev/null)"
+pri_gw="${pri_gw:-203.0.113.1}"
+route -n add -fib 0 default "$pri_gw" >/dev/null 2>&1 ||
+	route -n change -fib 0 default "$pri_gw" >/dev/null 2>&1
+say "FIB 0 default -> $pri_gw (ixl0)"
 
-# 3. Drop LAN states NATed via TMO; restore the ATT-only extras.
+# 3. Drop LAN states NATed via BACKUP; restore the PRIMARY-only extras.
 for net in $(pfctl -q -t nat_approved_wide -T show 2>/dev/null | /usr/bin/grep -v '^ *!'); do
 	pfctl -q -k nat -k "$net" >/dev/null 2>&1
 done
@@ -50,5 +50,5 @@ fi
 echo "----- result -----"
 route -n get default | /usr/bin/grep -E 'gateway|interface'
 pgrep -lf dpinger || echo "no dpinger running"
-if ping -c 3 -t 5 1.1.1.1 >/dev/null 2>&1; then say "OK: internet via ATT"
-else say "STILL NO INTERNET via ATT: check the fiber/WAS-110 (ping 192.168.11.1), not the controller"; fi
+if ping -c 3 -t 5 1.1.1.1 >/dev/null 2>&1; then say "OK: internet via PRIMARY"
+else say "STILL NO INTERNET via PRIMARY: check the fiber/ONT (ping 192.168.11.1), not the controller"; fi
