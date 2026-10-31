@@ -1,0 +1,70 @@
+#!/usr/local/bin/python3
+"""Drop-in for tcpping as smokeping's TCPPing probe binary, using connect().
+
+tcpping times a raw TCP SYN via traceroute/tcptraceroute; on this router no
+raw-socket probe gets replies (not even from hop 1), so every TCPPing target
+read 100% loss. A plain connect() measures the same SYN -> SYN-ACK round trip
+through the normal socket path, needs no privileges, and works per FIB if run
+under setfib.
+
+Interface (the subset smokeping's TCPPing.pm uses):
+    tcpping-connect -C -x COUNT HOST [PORT]
+prints one line "HOST : t1 t2 - t4 ..." with times in milliseconds and "-"
+for a failed attempt, which is what TCPPing.pm parses. Exit status is 0 so a
+partly failed round doesn't spam smokeping's log; errors go to stderr.
+"""
+
+from __future__ import annotations
+
+import socket
+import sys
+import time
+
+DEFAULT_PORT = 80  # tcpping's default when no port is given
+CONNECT_TIMEOUT_S = 2.0
+INTERVAL_S = 1.0  # between attempts, like tcpping's default
+
+
+def connect_ms(host: str, port: int) -> float | None:
+    """Return the TCP connect time to host:port in ms, or None if it failed."""
+    start = time.monotonic()
+    try:
+        with socket.create_connection((host, port), timeout=CONNECT_TIMEOUT_S):
+            return (time.monotonic() - start) * 1000.0
+    except OSError:
+        return None
+
+
+def parse(argv: list[str]) -> tuple[int, str, int]:
+    """Return (count, host, port) from tcpping-style arguments."""
+    count = 1
+    args = list(argv)
+    rest: list[str] = []
+    while args:
+        a = args.pop(0)
+        if a == "-C":
+            continue
+        if a == "-x":
+            count = int(args.pop(0))
+        else:
+            rest.append(a)
+    if not 1 <= len(rest) <= 2:
+        raise SystemExit("usage: tcpping-connect -C -x COUNT HOST [PORT]")
+    return count, rest[0], int(rest[1]) if len(rest) == 2 else DEFAULT_PORT
+
+
+def main(argv: list[str]) -> int:
+    """Run COUNT timed connects and print the tcpping -C line."""
+    count, host, port = parse(argv)
+    times: list[str] = []
+    for i in range(count):
+        if i:
+            time.sleep(INTERVAL_S)
+        ms = connect_ms(host, port)
+        times.append("-" if ms is None else f"{ms:.3f}")
+    print(f"{host} : {' '.join(times)}", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

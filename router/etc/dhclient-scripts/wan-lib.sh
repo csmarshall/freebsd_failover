@@ -1,4 +1,4 @@
-# /etc/dhclient-scripts/wan-lib.sh
+# wan-lib.sh (installed as /etc/dhclient-scripts/wan-lib.sh)
 #
 # Shared by the PRIMARY (ixl0) and BACKUP (ix0) dhclient hooks. Sourced (POSIX sh)
 # into /sbin/dhclient-script by the per-interface enter hook, which sets
