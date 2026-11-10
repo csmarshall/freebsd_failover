@@ -1,14 +1,22 @@
 #!/bin/sh
 # Smokeping FPing "binary" that probes through one uplink's own FIB, so PRIMARY
 # and BACKUP are both graphed whichever one is carrying traffic (FIB 0).
-# Installed twice, as fping-pri (FIB 1) and fping-bak (FIB 2); the name
-# picks the uplink. Binds the uplink's current DHCP address (source address
-# selection in FIB 1/2 could otherwise pick the rc.conf management alias).
+# Installed as fping-pri (FIB 1), fping-bak (FIB 2) and fping-bak6 (FIB 2,
+# IPv6); the name picks the uplink. Binds the uplink's current address
+# (source address selection in FIB 1/2 could otherwise pick the rc.conf
+# management alias, or for IPv6 a ULA or a deprecated prefix).
 # Targets must be IP literals: FIB 1/2 have no lo0 route, so names fail.
 case ${0##*/} in
 fping-pri) fib=1 role=pri ;;
 fping-bak) fib=2 role=bak ;;
-*) echo "fping-uplink: install as fping-pri or fping-bak" >&2; exit 2 ;;
+fping-bak6) fib=2 role=bak6 ;;
+*) echo "fping-uplink: install as fping-pri, fping-bak or fping-bak6" >&2; exit 2 ;;
 esac
-src=$(cat "/var/db/${role}_ip" 2>/dev/null)
+if [ "$role" = bak6 ]; then
+	# the 5G carrier rotates the /64: use ix0's newest usable global address.
+	src=$(ifconfig ix0 inet6 | awk '$1 == "inet6" && $2 ~ /^2/ && !/deprecated/ { a = $2 } END { print a }')
+	[ -n "$src" ] || { echo "fping-bak6: ix0 has no usable global IPv6 address" >&2; exit 1; }
+else
+	src=$(cat "/var/db/${role}_ip" 2>/dev/null)
+fi
 exec /usr/sbin/setfib "$fib" /usr/local/sbin/fping ${src:+-S "$src"} "$@"

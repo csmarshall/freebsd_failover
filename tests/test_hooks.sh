@@ -51,6 +51,9 @@ ping() { # all-routers probe: \${PING_REPLY:-} is the router that answers
 	return 0
 }
 arp() { :; }
+netstat() { # FIB 0 table: one default per gateway in \${FAKE_FIB0:-}
+	for _fg in \${FAKE_FIB0:-}; do echo "default \$_fg UGS ixl0"; done
+}
 . "$_t/stock_funcs"
 IFCONFIG=ifconfig   # stock sets /sbin/ifconfig -n; use the stub
 LOGGER=:
@@ -105,6 +108,21 @@ o=$(run_case ixl0 - ixl0 RENEW yes 'wan_exit')
 check "pri RENEW sets FIB 1 default" has "$o" 'add -fib 1 default 192.0.2.1'
 o=$(run_case ix0 - - EXPIRE yes 'wan_exit')
 check "bak EXPIRE removes FIB 2 default" has "$o" 'delete -fib 2 default'
+
+# FIB 0 must hold one default. With net.route.multipath=1 a second `route add
+# default` builds a two-path group (2026-11-10), so a lease event on the
+# ACTIVE uplink removes any FIB 0 default that is not its own router.
+o=$(export FAKE_FIB0="192.0.2.1 198.51.100.1"; run_case ixl0 - ixl0 RENEW yes 'wan_exit')
+check "active pri RENEW removes the extra FIB 0 default" has "$o" '^route -n delete -fib 0 default 198.51.100.1$'
+check "active pri RENEW keeps its own FIB 0 default" lacks "$o" 'delete -fib 0 default 192.0.2.1'
+o=$(export FAKE_FIB0="192.0.2.1 198.51.100.1"; run_case ix0 bak ix0 RENEW yes 'wan_exit')
+check "active bak RENEW removes the extra FIB 0 default" has "$o" '^route -n delete -fib 0 default 198.51.100.1$'
+o=$(export FAKE_FIB0="192.0.2.1 198.51.100.1"; run_case ix0 - - RENEW yes 'wan_exit')
+check "inactive bak RENEW never deletes a FIB 0 default" lacks "$o" 'delete -fib 0'
+o=$(export FAKE_FIB0="198.51.100.1"; run_case ixl0 - ixl0 RENEW yes 'wan_exit')
+check "active pri whose router is not in FIB 0 deletes nothing (never empties FIB 0)" lacks "$o" 'delete -fib 0'
+o=$(export FAKE_FIB0="192.0.2.1"; run_case ixl0 - ixl0 RENEW yes 'wan_exit')
+check "active pri with a single correct default deletes nothing" lacks "$o" 'delete -fib 0'
 
 # pf NAT tables follow the lease (pf.conf NATs to <pri_addr>/<bak_addr>, not
 # (if:0), because the rc.conf mgmt alias can be the first address after boot).

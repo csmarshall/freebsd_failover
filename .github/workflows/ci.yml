@@ -60,3 +60,5 @@ jobs:
             sh tests/test_hooks.sh
             sh tests/test_failover.sh
             sh tests/test_radvd_detector.sh
+            sh tests/test_fixes.sh
+            sh tests/test_gateway_entries.sh

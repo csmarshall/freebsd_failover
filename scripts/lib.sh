@@ -11,7 +11,11 @@ BACKUP_PATHS=(
 	/etc/dhclient.conf /etc/dhclient-enter-hooks /etc/dhclient-exit-hooks /etc/dhclient-scripts
 	/etc/dpinger
 	/usr/local/sbin/wan-failover /usr/local/etc/rc.d/wan_failover /etc/cron.d/wan-failover
-	/usr/local/etc/smokeping/config /usr/local/libexec/fping-pri /usr/local/libexec/fping-bak /usr/local/libexec/traceroute6-bak /usr/local/libexec/tcpping-connect
+	/usr/local/libexec/wan-notify /usr/local/etc/wan-notify.conf /etc/ip6addrctl.conf /usr/local/etc/newsyslog.conf.d/wan-failover.conf
+	/etc/periodic.conf /usr/local/etc/periodic/daily/480.status-smokeping
+	/usr/local/etc/smokeping/config /usr/local/libexec/fping-pri /usr/local/libexec/fping-bak /usr/local/libexec/fping-bak6 /usr/local/libexec/traceroute6-bak /usr/local/libexec/tcpping-connect
+	/usr/local/sbin/bak-clat /usr/local/etc/bak-clat.conf /etc/cron.d/bak-clat
+	/boot/loader.conf.d /boot/modules/pf.ko /boot/modules/pf.ko.buildinfo /usr/local/etc/periodic/daily/481.status-pfko
 )
 
 say()  { printf '[%s] %s\n' "$(date +%T)" "$*"; }

@@ -1,0 +1,55 @@
+#!/bin/sh
+# /usr/local/libexec/wan-notify — send one Pushover message, over IPv4 only.
+#
+# Usage: echo "message" | wan-notify [high|normal|low]
+#
+# IPv4 only, with hard time limits: this is what tells you the primary uplink
+# has gone, and at that moment the router's IPv6 default still points at the
+# dead uplink, so a client that tries IPv6 first hangs until it is killed
+# (2026-11-10: both transition pushes were lost that way).
+#
+# Credentials come from /usr/local/etc/wan-notify.conf (root, mode 0600):
+#   PUSHOVER_USER=...
+#   PUSHOVER_TOKEN=...
+# They reach curl on stdin, never on its command line (which `ps` shows).
+#
+# Exit: 0 = Pushover accepted the message, 1 = send failed, 2 = usage/config.
+unset TMOUT
+set -u
+PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/bin
+
+CONF="${WN_CONF:-/usr/local/etc/wan-notify.conf}"
+CURL="${WN_CURL:-/usr/local/bin/curl}"
+API_URL=https://api.pushover.net/1/messages.json
+CONNECT_TIMEOUT_S=8
+ATTEMPT_TIMEOUT_S=15
+RETRIES=3
+RETRY_DELAY_S=5
+
+case "${1:-normal}" in
+high) priority=1 ;;
+normal) priority=0 ;;
+low) priority=-1 ;;
+*) echo "usage: echo message | $0 [high|normal|low]" >&2; exit 2 ;;
+esac
+
+if [ ! -r "$CONF" ]; then echo "wan-notify: cannot read $CONF" >&2; exit 2; fi
+PUSHOVER_USER=; PUSHOVER_TOKEN=
+. "$CONF"
+if [ -z "$PUSHOVER_USER" ] || [ -z "$PUSHOVER_TOKEN" ]; then
+	echo "wan-notify: $CONF must set PUSHOVER_USER and PUSHOVER_TOKEN" >&2; exit 2
+fi
+
+message=$(cat)
+if [ -z "$message" ]; then echo "wan-notify: empty message on stdin" >&2; exit 2; fi
+
+printf 'form-string = "token=%s"\nform-string = "user=%s"\n' "$PUSHOVER_TOKEN" "$PUSHOVER_USER" |
+	"$CURL" -4 --silent --show-error --fail --output /dev/null \
+		--connect-timeout "$CONNECT_TIMEOUT_S" --max-time "$ATTEMPT_TIMEOUT_S" \
+		--retry "$RETRIES" --retry-delay "$RETRY_DELAY_S" --retry-all-errors \
+		--config - \
+		--form-string "priority=$priority" \
+		--form-string "title=$(hostname -s) WAN" \
+		--form-string "message=$message" \
+		"$API_URL" || exit 1
+exit 0

@@ -23,9 +23,15 @@ PROBE_SEND_MS=1000
 PROBE_PERIOD_MS=20000   # dpinger averaging window
 PROBE_DATA_BYTES=16     # dpinger's default 0-byte echo loses 33-75% over BACKUP's NAT64; 16 loses none
 PROBE_TARGETS="cf=1.1.1.1 gg=8.8.8.8"   # IP literals: FIB 1/2 have no lo0 route
+# BACKUP is probed on the path the LAN uses on failover: IPv6 to the 5G carrier's NAT64
+# from bak-clat's ::464 alias (CLAT_PLAN.md), not IPv4 via the CPE's flaky CLAT.
+# clat4 = the old IPv4-via-CPE probes from the lease address (rollback lever).
+BACKUP_PROBE_PATH=nat64
+PROBE_TARGETS_NAT64="cf=64:ff9b::1.1.1.1 gg=64:ff9b::8.8.8.8"   # same names as PROBE_TARGETS
 BACKUP_BLOCK_HOSTS=""      # LAN hosts denied internet while on BACKUP (unlimited data: none)
 LED_BACKUP="ea0a8e"
 LED_PRIMARY="000000"
+NOTIFY_TIMEOUT_S=90     # one whole notification attempt, the sender's retries included
 
 # --- paths (overridable for tests) ------------------------------------------------
 SELF="${WF_SELF:-/usr/local/sbin/wan-failover}"
@@ -39,11 +45,14 @@ EVENT_LOG="${WF_EVENT_LOG:-/var/log/network_failover.log}"
 DRYRUN="${WF_DRYRUN:-0}"
 FAKE_PROBES="${WF_FAKE_PROBES:-}"   # tests: dir of <role>_<name> files holding loss %
 MINIUPNPD="${WF_MINIUPNPD:-auto}"   # tests: yes|no instead of asking rc.conf
+BACKUP_CLAT="${WF_BACKUP_CLAT:-/usr/local/sbin/bak-clat}"
+NOTIFY_CMD="${WF_NOTIFY_CMD:-/usr/local/libexec/wan-notify}"   # message on stdin, priority as $1
+LOGGER_CMD="${WF_LOGGER:-logger}"   # tests: true, to keep test lines out of syslog
 
 role_if()  { case $1 in pri) echo ixl0 ;; bak) echo ix0 ;; esac; }
 role_fib() { case $1 in pri) echo 1 ;; bak) echo 2 ;; esac; }
 
-log() { [[ $DRYRUN == 1 ]] || logger -t wan-failover "$*" 2>/dev/null; echo "$(date '+%F %T') $*"; }
+log() { [[ $DRYRUN == 1 ]] || $LOGGER_CMD -t wan-failover "$*" 2>/dev/null; echo "$(date '+%F %T') $*"; }
 # Under WF_DRYRUN=1, run() prints to fd 9 (the original stderr), so the
 # redirects on a call site cannot hide what would have run.
 [[ $DRYRUN == 1 ]] && exec 9>&2
@@ -60,12 +69,28 @@ probe_names() { local t; for t in $PROBE_TARGETS; do echo "${t%%=*}"; done; }
 probe_sock() { echo "$RUN/dpinger_$1_$2.sock"; }
 probe_pid()  { echo "$RUN/dpinger_$1_$2.pid"; }
 
+probe_targets() { # probe_targets <role>
+	if [[ $1 == bak && $BACKUP_PROBE_PATH == nat64 ]]; then echo "$PROBE_TARGETS_NAT64"; else echo "$PROBE_TARGETS"; fi
+}
+# The address the role's probes bind: the DHCP lease, or for BACKUP on nat64
+# the ::464 alias that bak-clat records first in $DB/bak_clat. Empty = none.
+probe_source() { # probe_source <role>
+	local a
+	if [[ $1 == bak && $BACKUP_PROBE_PATH == nat64 ]]; then
+		read -r a _ < "$DB/bak_clat" 2>/dev/null
+		[[ $a == *:* ]] && echo "$a"
+	else
+		cat "$DB/${1}_ip" 2>/dev/null
+	fi
+	return 0
+}
+
 probe_start() { # probe_start <role>
 	local role=$1 fib ip t name
 	fib=$(role_fib "$role")
-	ip=$(cat "$DB/${role}_ip" 2>/dev/null)
-	if [[ -z $ip ]]; then log "$role: no $DB/${role}_ip, probes not started"; return 1; fi
-	for t in $PROBE_TARGETS; do
+	ip=$(probe_source "$role")
+	if [[ -z $ip ]]; then log "$role: no probe source address, probes not started"; return 1; fi
+	for t in $(probe_targets "$role"); do
 		name=${t%%=*}
 		# dpinger runs the alert command from inside FIB $fib: force FIB 0.
 		run setfib "$fib" dpinger -S -B "$ip" -i "${role}_$name" \
@@ -157,18 +182,77 @@ decide() {
 }
 
 # --- transitions ----------------------------------------------------------------------
-fib0_default_gw() {
-	if [[ -n ${WF_FIB0_GW:-} ]]; then echo "$WF_FIB0_GW"; return; fi
-	route -n get -fib 0 -inet default 2>/dev/null | awk '$1 == "gateway:" { print $2 }'; }
+# Every IPv4 gateway FIB <fib> holds for <dest>, one per line. netstat lists
+# each path of a multipath route; `route get` shows only the first, which is
+# how a second FIB 0 default went unnoticed on 2026-11-10.
+fib_route_gws() { # fib_route_gws <fib> <dest>
+	if [[ -n ${WF_FAKE_GWS+x} ]]; then   # tests: space-separated gateways
+		[[ -z $WF_FAKE_GWS ]] || printf '%s\n' $WF_FAKE_GWS
+		return
+	fi
+	netstat -rn -4 -F "$1" | awk -v d="$2" '$1 == d { print $2 }'
+}
+
+# Leave FIB <fib> with exactly one route for <dest>, via <gw>.
+# With net.route.multipath=1, `route add` beside a route that has another
+# gateway does not fail: it builds an equal-weight group and traffic is split
+# across both uplinks. So every other path is deleted by name and the table
+# is read back. The wanted route is added before the others are deleted, so
+# <dest> is never left without a route.
+# Returns 0 = already correct, 1 = changed and verified, 2 = could not get there.
+set_single_route() { # set_single_route <fib> <dest> <gw>
+	local fib=$1 dest=$2 gw=$3 g have=0 changed=0 left
+	for g in $(fib_route_gws "$fib" "$dest"); do
+		if [[ $g == "$gw" ]]; then have=1; fi
+	done
+	if (( ! have )); then
+		run route -n add -fib "$fib" "$dest" "$gw" >/dev/null 2>&1 ||
+			run route -n change -fib "$fib" "$dest" "$gw" >/dev/null 2>&1
+		changed=1
+	fi
+	for g in $(fib_route_gws "$fib" "$dest"); do
+		[[ $g == "$gw" ]] && continue
+		run route -n delete -fib "$fib" "$dest" "$g" >/dev/null 2>&1
+		log "FIB $fib $dest: removed extra path via $g"
+		changed=1
+	done
+	(( changed )) || return 0
+	[[ $DRYRUN == 1 ]] && return 1
+	left=$(fib_route_gws "$fib" "$dest" | tr '\n' ' '); left=${left% }
+	if [[ -z $left ]]; then
+		# A delete took the wanted path with it: put it back.
+		route -n add -fib "$fib" "$dest" "$gw" >/dev/null 2>&1
+		left=$(fib_route_gws "$fib" "$dest" | tr '\n' ' '); left=${left% }
+	fi
+	if [[ $left == "$gw" ]]; then return 1; fi
+	log "FIB $fib $dest: wanted only $gw, have: ${left:-none}"
+	return 2
+}
 
 set_fib0_default() { # set_fib0_default <role>
 	local gw
 	gw=$(cat "$DB/$1_router" 2>/dev/null)
 	if [[ -z $gw ]]; then log "$1: no $DB/$1_router, FIB 0 default not set"; return 1; fi
-	if [[ $(fib0_default_gw) == "$gw" ]]; then return 0; fi
-	run route -n add -fib 0 default "$gw" >/dev/null 2>&1 ||
-		run route -n change -fib 0 default "$gw" >/dev/null
-	log "FIB 0 default via $gw ($1)"
+	set_single_route 0 default "$gw"
+	case $? in
+	0) return 0 ;;
+	1) log "FIB 0 default via $gw ($1)" ;;
+	*) return 1 ;;
+	esac
+}
+
+# Sends <message> through $NOTIFY_CMD and records a failure in syslog and the
+# event log: on 2026-11-10 both transition pushes timed out with their output
+# discarded, so nothing showed they had never been sent.
+notify_send() { # notify_send <message>   (synchronous)
+	if printf '%s\n' "$1" | timeout "$NOTIFY_TIMEOUT_S" "$NOTIFY_CMD" high >/dev/null 2>&1; then return 0; fi
+	log "NOTIFY FAILED: $1" >/dev/null
+	echo "$(date '+%F %T %Z') notify failed: $1" >> "$EVENT_LOG"
+	return 1
+}
+notify() { # notify <message>   (never blocks the caller)
+	if [[ $DRYRUN == 1 ]]; then echo "DRYRUN: notify $1" >&9; return 0; fi
+	( notify_send "$1" </dev/null >/dev/null 2>&1 & )
 }
 
 miniupnpd_enabled() {
@@ -191,10 +275,22 @@ transition() { # transition <to-role> <reason>
 	set_fib0_default "$to"
 	# IPv6 failover (no_radr ixl0, v6 default via the CPE, NAT66) is P4.
 
+	# LAN IPv4 through router's own CLAT while on BACKUP (CLAT_PLAN.md phase 4):
+	# bak-clat reads the state just written and switches its af-to anchor
+	# between every segment and the test hosts. Before the state kills, so
+	# reconnecting clients already meet the new rules.
+	if [[ -x $BACKUP_CLAT || $DRYRUN == 1 ]]; then
+		run "$BACKUP_CLAT" sync >/dev/null 2>&1 || log "bak-clat sync failed"
+	fi
+
 	# Drop LAN states still NATed to the old uplink so clients reconnect now.
 	for net in $(pfctl -q -t nat_approved_wide -T show 2>/dev/null | /usr/bin/grep -v '^ *!'); do
 		run pfctl -q -k nat -k "$net" >/dev/null 2>&1 || log "pfctl -k nat -k $net failed"
 	done
+	# Flushing the anchor leaves its translated states running over BACKUP.
+	if [[ $to == pri ]]; then
+		run pfctl -q -k label -k clat64 >/dev/null 2>&1 || log "pfctl -k label -k clat64 failed"
+	fi
 	for ip in $BACKUP_BLOCK_HOSTS; do
 		if [[ $to == bak ]]; then run pfctl -q -t nat_approved_wide -T add "!$ip"
 		else run pfctl -q -t nat_approved_wide -T delete "!$ip"; fi
@@ -214,9 +310,8 @@ transition() { # transition <to-role> <reason>
 
 	if [[ $DRYRUN != 1 ]]; then
 		echo "$(date '+%F %T %Z') $from -> $to ($reason) via $(cat "$DB/${to}_ip" 2>/dev/null)" >> "$EVENT_LOG"
-		( echo "WAN $from -> $to ($reason) - $(cat "$DB/${to}_ip" 2>/dev/null) - $(date)" |
-			timeout 30 /usr/local/bin/pushover_message.sh high >/dev/null 2>&1 & )
 	fi
+	notify "WAN $from -> $to ($reason) - $(cat "$DB/${to}_ip" 2>/dev/null) - $(date)"
 }
 
 evaluate_locked() {
@@ -252,9 +347,11 @@ evaluate_locked() {
 }
 
 status() {
-	local role name
+	local role name gws
 	echo "state: $(active_role)  (last change: $(cat "$LAST_CHANGE_FILE" 2>/dev/null || echo never), pri clear since: $(cat "$OK_SINCE_FILE" 2>/dev/null || echo -))"
-	echo "FIB 0 default: $(fib0_default_gw)"
+	gws=$(fib_route_gws 0 default | tr '\n' ' '); gws=${gws% }
+	if [[ $gws == *" "* ]]; then echo "FIB 0 default: $gws  <-- MULTIPATH: traffic is split across uplinks"
+	else echo "FIB 0 default: ${gws:-none}"; fi
 	for role in pri bak; do
 		printf '%s (%s FIB %s):' "$role" "$(role_if "$role")" "$(role_fib "$role")"
 		for name in $(probe_names); do printf ' %s=%s%%' "$name" "$(probe_loss "$role" "$name")"; done

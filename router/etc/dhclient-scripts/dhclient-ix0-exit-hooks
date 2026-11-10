@@ -9,3 +9,8 @@ wan_exit
 /etc/dhclient-scripts/set_gateway_entries.sh "$(wan_first_router)" \
     "gateway-bak.localhost gateway-backup.localhost" \
     allow-private
+
+# router-as-CLAT: re-sync the ::464 source alias, NAT64 route and af-to rules
+# now rather than at the next cron minute (CLAT_PLAN.md).
+: "${BACKUP_CLAT:=/usr/local/sbin/bak-clat}"
+[ -x "$BACKUP_CLAT" ] && "$BACKUP_CLAT" sync >/dev/null 2>&1 &

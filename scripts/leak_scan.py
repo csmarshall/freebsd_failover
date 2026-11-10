@@ -47,6 +47,10 @@ ALLOWED_PUBLIC_V6 = {
     "2606:4700:4700::1111", "2606:4700:4700::1001",
     "2620:fe::fe", "2620:fe::9",
 }
+# Protocol-defined prefixes named whole, as they appear in FreeBSD's stock
+# address-selection table (6to4, Teredo, 6bone). Only the bare root is fine:
+# an address inside one of them can embed a real IPv4 address.
+WELLKNOWN_V6_ROOTS = {"2002::", "2001::", "3ffe::"}
 DOC_V4 = [ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")]
 SPECIAL_V4 = [ipaddress.ip_network(n) for n in ("192.0.0.0/24", "0.0.0.0/8", "100.64.0.0/10")]
 DOC_V6 = [ipaddress.ip_network(n) for n in ("2001:db8::/32", "3fff::/20")]  # RFC 3849, RFC 9637
@@ -141,6 +145,8 @@ def v6_reason(token: str) -> str | None:
     low = low[start.start():]  # drop label prefixes like "ip6:", "via:", "gua"
     if low.rstrip(":") in ALLOWED_PUBLIC_V6 or low in ALLOWED_PUBLIC_V6:
         return None
+    if low.split("/")[0] in WELLKNOWN_V6_ROOTS:
+        return None
     addr = parse_v6(low)
     if addr is None:
         return None
@@ -227,6 +233,7 @@ MUST_FLAG = [
     "fe80::a2b:c3" "ff:fed4:e5f6%ix0", "3a:5b:7c" ":1d:2e:4f", "3a-5b-7c" "-1d-2e-4f",
     "3a5b.7c1d" ".2e4f", "0:25:90" ":a:b:c", "/home/" "bob/x", "/Users/" "bob/work", "~" "bob/bin",
     "mail ops" "@realdomain.net",
+    "2002:c6" "33:6401::1", "2001:0" ":53aa:64c::1", "3ffe:12" "34::1",
 ]
 MUST_PASS = [
     "203.0.113.32", "198.51.100.1 192.0.2.50", "1.1.1.1 8.8.8.8", "192.168.100.10",
@@ -234,6 +241,7 @@ MUST_PASS = [
     "fd00:1234:5678:1::1", "fd00:db8:1::/48", "fe80::200:5eff:fe00:5301%ix0", "fe80::1:2%ix0",
     "00:00:5e:00:53:01", "admin@example.com", "/home/admin", "~admin/bin", "time 18:53:05",
     "s/::/x/", "ff02::2", "version 15.1.0", "a::b", "TMOUT", "${foo:-bar}", "fc00::/7", "fd00::/8",
+    "2002::/16", "2001::/32", "3ffe::/16",
 ]
 
 
