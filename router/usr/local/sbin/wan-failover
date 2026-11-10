@@ -8,7 +8,7 @@
 # /var/run/wan_state (absent = pri) records the decision; the dhclient hooks
 # (wan-lib.sh) read it so DHCP never fights the controller over FIB 0.
 #
-# Usage: wan-failover start|stop|status|evaluate|probe-restart <pri|bak>
+# Usage: wan-failover start|stop|status|evaluate|reconcile|probe-restart <pri|bak>
 unset TMOUT
 set -uo pipefail
 PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
@@ -197,26 +197,35 @@ fib_route_gws() { # fib_route_gws <fib> <dest>
 # With net.route.multipath=1, `route add` beside a route that has another
 # gateway does not fail: it builds an equal-weight group and traffic is split
 # across both uplinks. So every other path is deleted by name and the table
-# is read back. The wanted route is added before the others are deleted, so
-# <dest> is never left without a route.
+# is read back. The wanted route goes in before the others come out, and if
+# it cannot be put in nothing is deleted, so <dest> is never left without a
+# route by this function.
 # Returns 0 = already correct, 1 = changed and verified, 2 = could not get there.
 set_single_route() { # set_single_route <fib> <dest> <gw>
-	local fib=$1 dest=$2 gw=$3 g have=0 changed=0 left
+	local fib=$1 dest=$2 gw=$3 g have=0 changed=0 failed=0 left
 	for g in $(fib_route_gws "$fib" "$dest"); do
 		if [[ $g == "$gw" ]]; then have=1; fi
 	done
 	if (( ! have )); then
-		run route -n add -fib "$fib" "$dest" "$gw" >/dev/null 2>&1 ||
-			run route -n change -fib "$fib" "$dest" "$gw" >/dev/null 2>&1
+		if ! { run route -n add -fib "$fib" "$dest" "$gw" >/dev/null 2>&1 ||
+			run route -n change -fib "$fib" "$dest" "$gw" >/dev/null 2>&1; }; then
+			# Keep whatever route is there: a wrong default beats none.
+			log "FIB $fib $dest: could not add or change to $gw; existing route left in place"
+			return 2   # add-failed
+		fi
 		changed=1
 	fi
 	for g in $(fib_route_gws "$fib" "$dest"); do
 		[[ $g == "$gw" ]] && continue
-		run route -n delete -fib "$fib" "$dest" "$g" >/dev/null 2>&1
-		log "FIB $fib $dest: removed extra path via $g"
-		changed=1
+		if run route -n delete -fib "$fib" "$dest" "$g" >/dev/null 2>&1; then
+			log "FIB $fib $dest: removed extra path via $g"
+			changed=1
+		else
+			log "FIB $fib $dest: could not remove extra path via $g"
+			failed=1
+		fi
 	done
-	(( changed )) || return 0
+	(( changed || failed )) || return 0
 	[[ $DRYRUN == 1 ]] && return 1
 	left=$(fib_route_gws "$fib" "$dest" | tr '\n' ' '); left=${left% }
 	if [[ -z $left ]]; then
@@ -314,6 +323,17 @@ transition() { # transition <to-role> <reason>
 	notify "WAN $from -> $to ($reason) - $(cat "$DB/${to}_ip" 2>/dev/null) - $(date)"
 }
 
+# FIB 0's default for the active uplink, without making a decision. The
+# dhclient hooks call this after a lease event instead of touching FIB 0
+# themselves, so every FIB 0 change happens under the controller's lock.
+reconcile_locked() {
+	local state
+	state=$(active_role)
+	[[ -s $DB/${state}_router ]] || return 0
+	set_fib0_default "$state"
+	return 0
+}
+
 evaluate_locked() {
 	local state pri bak t ok_since last age verdict action
 	state=$(active_role)
@@ -379,6 +399,8 @@ probe-restart)
 	;;
 evaluate) exec lockf -k -t 20 "$LOCK" "$0" _evaluate ;;
 _evaluate) evaluate_locked ;;
+reconcile) exec lockf -k -t 20 "$LOCK" "$0" _reconcile ;;
+_reconcile) reconcile_locked ;;
 status) status ;;
-*) echo "usage: $0 start|stop|status|evaluate|probe-restart <pri|bak>" >&2; exit 2 ;;
+*) echo "usage: $0 start|stop|status|evaluate|reconcile|probe-restart <pri|bak>" >&2; exit 2 ;;
 esac

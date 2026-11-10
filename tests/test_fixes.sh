@@ -33,6 +33,11 @@ check_not() { # check_not <description> <unwanted-substring> <actual>
 	esac
 }
 
+check_eq() { # check_eq <description> <expected> <actual>   (exact match)
+	if [ "$2" = "$3" ]; then passes=$((passes + 1)); echo "ok   - $1"
+	else fails=$((fails + 1)); echo "FAIL - $1 (want '$2', got '$3')"; fi
+}
+
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 mkdir "$T/run" "$T/db" "$T/fake"
@@ -91,6 +96,58 @@ check     "status lists both gateways"           "$PRIMARY_GW $BACKUP_GW" "$(st 
 check_not "status is quiet about one default"    "MULTIPATH" "$(st "$PRIMARY_GW")"
 check     "status reports a missing default"     "FIB 0 default: none" "$(st "")"
 
+# --- the same function, not in dry-run, against a fake routing table --------------
+# Dry-run stops before the read-back, so everything that tells success from
+# failure runs here: `route` and `netstat` are shell functions over a file
+# with one gateway per line. FAIL_ADD/FAIL_CHANGE/FAIL_DELETE make that
+# command fail; DELETE_ALL makes a delete take the whole route with it.
+# rt <multipath 0|1> "<initial gateways>" <wanted> [VAR=1 ...]  ->  "rc=N table=<gws> " + log
+rt() {
+	_mp=$1 _init=$2 _want=$3; shift 3
+	: > "$T/table"
+	for _g in $_init; do echo "$_g" >> "$T/table"; done
+	env "$@" WF_SOURCE_ONLY=1 WF_LOGGER=true WF_RUN="$T/run" WF_DB="$T/db" FAKE_TABLE="$T/table" FAKE_MP="$_mp" \
+	/usr/local/bin/bash -c '
+		. "$0"
+		netstat() { sed "s/^/default /" "$FAKE_TABLE"; }
+		route() {
+			local op=$2 gw=$6
+			case $op in
+			add)
+				[[ -z ${FAIL_ADD:-} ]] || return 1
+				if [[ $(grep -cxF -- "$gw" "$FAKE_TABLE") -gt 0 ]]; then return 1; fi
+				if [[ -s $FAKE_TABLE && $FAKE_MP == 0 ]]; then return 1; fi
+				echo "$gw" >> "$FAKE_TABLE" ;;
+			change)
+				[[ -z ${FAIL_CHANGE:-} ]] || return 1
+				echo "$gw" > "$FAKE_TABLE" ;;
+			delete)
+				[[ -z ${FAIL_DELETE:-} ]] || return 1
+				if [[ -n ${DELETE_ALL:-} ]]; then : > "$FAKE_TABLE"
+				else grep -vxF -- "$gw" "$FAKE_TABLE" > "$FAKE_TABLE.n"; mv "$FAKE_TABLE.n" "$FAKE_TABLE"; fi ;;
+			esac
+		}
+		set_single_route 0 default "$1"
+		echo "rc=$? table=$(tr "\n" " " < "$FAKE_TABLE")"
+	' "$CTL" "$_want" 2>&1
+}
+A=$PRIMARY_GW; B=$BACKUP_GW; C=203.0.113.1
+check "fake table, no route: added"                       "rc=1 table=$A " "$(rt 1 "" $A)"
+check "fake table, already right: untouched, rc 0"        "rc=0 table=$A " "$(rt 1 "$A" $A)"
+check "fake table, one wrong (multipath on): replaced"    "rc=1 table=$A " "$(rt 1 "$B" $A)"
+check "fake table, one wrong (multipath off): changed"    "rc=1 table=$A " "$(rt 0 "$B" $A)"
+check "fake table, two defaults: reduced to the wanted"   "rc=1 table=$A " "$(rt 1 "$A $B" $A)"
+check "fake table, three defaults: reduced to the wanted" "rc=1 table=$A " "$(rt 1 "$B $A $C" $A)"
+check "fake table, two wrong: both replaced"              "rc=1 table=$A " "$(rt 1 "$B $C" $A)"
+o=$(rt 1 "$B" $A FAIL_ADD=1 FAIL_CHANGE=1)
+check     "add and change both fail: the old default is kept, rc 2" "rc=2 table=$B " "$o"
+check_not "add and change both fail: nothing reported removed"      "removed extra path" "$o"
+o=$(rt 1 "$A $B" $A FAIL_DELETE=1)
+check     "delete fails: reported as failure, rc 2"                 "rc=2 table=$A $B " "$o"
+check     "delete fails: the log says so"                           "could not remove extra path via $B" "$o"
+check_not "delete fails: not logged as removed"                     "removed extra path" "$o"
+check "a delete that takes the whole route: wanted route re-added"  "rc=1 table=$A " "$(rt 1 "$A $B" $A DELETE_ALL=1)"
+
 # --- notifications -----------------------------------------------------------------
 o=$(ev - 100 0 "$PRIMARY_GW")
 check "transition notifies"                      "DRYRUN: notify WAN pri -> bak (pri-down)" "$o"
@@ -121,7 +178,7 @@ printf 'PUSHOVER_USER=uuuSECRETuuu\nPUSHOVER_TOKEN=tttSECRETttt\n' > "$T/conf"
 wn() { WN_CONF="${WN_CONF_OVERRIDE:-$T/conf}" WN_CURL="$T/curl" sh "$NOTIFIER" "$@"; }
 rm -f "$T/curl.argv"; echo "uplink moved" | wn high; rc=$?
 argv=$(cat "$T/curl.argv" 2>/dev/null); stdin=$(cat "$T/curl.stdin" 2>/dev/null)
-check     "wan-notify: accepted send exits 0"               "0" "$rc"
+check_eq  "wan-notify: accepted send exits 0"               "0" "$rc"
 check     "wan-notify: forces IPv4"                         "
 -4
 " "
@@ -133,9 +190,19 @@ check     "wan-notify: message passed"                      "message=uplink move
 check_not "wan-notify: token is not on curl's command line" "tttSECRETttt" "$argv"
 check_not "wan-notify: user is not on curl's command line"  "uuuSECRETuuu" "$argv"
 check     "wan-notify: token goes to curl on stdin"         "token=tttSECRETttt" "$stdin"
-( export CURL_RC=7; echo "uplink moved" | wn high >/dev/null 2>&1 ); check "wan-notify: failed send exits 1" "1" "$?"
-echo "uplink moved" | WN_CONF_OVERRIDE=/nonexistent wn high >/dev/null 2>&1; check "wan-notify: missing config exits 2" "2" "$?"
-printf '' | wn high >/dev/null 2>&1; check "wan-notify: empty message exits 2" "2" "$?"
+( export CURL_RC=7; echo "uplink moved" | wn high >/dev/null 2>&1 ); check_eq "wan-notify: failed send exits 1" "1" "$?"
+echo "uplink moved" | WN_CONF_OVERRIDE=/nonexistent wn high >/dev/null 2>&1; check_eq "wan-notify: missing config exits 2" "2" "$?"
+printf '' | wn high >/dev/null 2>&1; check_eq "wan-notify: empty message exits 2" "2" "$?"
+# A quote or backslash in a credential must reach curl escaped (unescaped,
+# curl cuts the value at the quote and sends an unauthenticated request).
+printf 'PUSHOVER_USER=plainuser\nPUSHOVER_TOKEN=ab"c\\d\n' > "$T/conf.q"
+echo "uplink moved" | WN_CONF_OVERRIDE="$T/conf.q" wn high
+check "wan-notify: quote and backslash in the token are escaped for curl" 'token=ab\"c\\d"' "$(cat "$T/curl.stdin")"
+# The config file is data: a line that would run a command if sourced must not.
+printf 'PUSHOVER_USER=u; touch %s/pwned\nPUSHOVER_TOKEN=t\n' "$T" > "$T/conf.x"
+echo "uplink moved" | WN_CONF_OVERRIDE="$T/conf.x" wn high >/dev/null 2>&1
+if [ -e "$T/pwned" ]; then fails=$((fails + 1)); echo "FAIL - wan-notify executed its config file"
+else passes=$((passes + 1)); echo "ok   - wan-notify does not execute its config file"; fi
 
 echo "passed=$passes failed=$fails"
 [ "$fails" -eq 0 ] || exit 1
@@ -146,6 +213,8 @@ if [ $# -eq 0 ]; then
 	for mut in 's/run route -n delete -fib "\$fib"/: route -n delete -fib "$fib"/' \
 	           's/if \[\[ \$g == "\$gw" \]\]; then have=1; fi/:/' \
 	           's/run route -n add -fib "\$fib" "\$dest" "\$gw" >\/dev\/null 2>&1 ||/true ||/' \
+	           's/return 2   # add-failed/: # add-failed/' \
+	           's/if \[\[ \$left == "\$gw" \]\]; then return 1; fi/return 1/' \
 	           's/notify failed: \$1" >> "\$EVENT_LOG"/notify failed: $1" >> \/dev\/null/' \
 	           's/timeout "\$NOTIFY_TIMEOUT_S" //' \
 	           's/^	notify "WAN /	: "WAN /'; do
@@ -157,6 +226,7 @@ if [ $# -eq 0 ]; then
 		echo "ok   - mutant caught: $mut"
 	done
 	for mut in 's/"\$CURL" -4 /"$CURL" /' \
+	           's/"\$(cfg_escape "\$PUSHOVER_TOKEN")"/"$PUSHOVER_TOKEN"/' \
 	           's/--config - \\/--form-string "token=$PUSHOVER_TOKEN" \\/'; do
 		sed "$mut" "$NOTIFIER" > "$m"
 		if cmp -s "$m" "$NOTIFIER"; then echo "FAIL - mutation did not apply: $mut"; exit 1; fi

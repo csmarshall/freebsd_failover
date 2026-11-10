@@ -36,7 +36,7 @@ pass() { echo "ok   - $*"; }
 fail() { echo "FAIL - $*"; fails=$((fails + 1)); }
 
 # Independent readings (neither is the controller's fib_route_gws).
-table_paths() { netstat -rn -4 -F "$TEST_FIB" | grep -c "^$TEST_PREFIX[[:space:]]"; }
+table_paths() { netstat -rn -4 -F "$TEST_FIB" | grep -c "^${TEST_PREFIX}[[:space:]]"; }
 group_count() { netstat -4 -OnW -F "$TEST_FIB" | awk '$1 ~ /^[0-9]+$/ && $2 ~ /^-+$/' | grep -c .; }
 # The kernel frees a nexthop group a moment after the last route stops using
 # it (first run, 2026-11-10: the count read 1, then 0 within the same line),

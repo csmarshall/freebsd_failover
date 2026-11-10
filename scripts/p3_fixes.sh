@@ -45,6 +45,17 @@ declare -A FILES=(
 	[/usr/local/etc/newsyslog.conf.d/wan-failover.conf]=0644
 )
 
+# Install order: the sender before the controller that calls it.
+INSTALL_ORDER=(
+	"$NOTIFIER"
+	/etc/dhclient-scripts/set_gateway_entries.sh
+	/usr/local/etc/newsyslog.conf.d/wan-failover.conf
+	"$POLICY"
+	"$CTL"
+	/etc/dhclient-scripts/wan-lib.sh
+)
+(( ${#INSTALL_ORDER[@]} == ${#FILES[@]} )) || die "INSTALL_ORDER and FILES disagree"
+
 STAGE="$(mktemp -d -t p3fixes)"
 trap 'rm -rf "$STAGE"' EXIT
 mkdir "$STAGE/run"
@@ -169,45 +180,55 @@ hr "live route test (root, real routing table, before anything is installed)"
 
 backup p3fixes
 had_policy=no; [[ -e $POLICY ]] && had_policy=yes
-for live in "${!FILES[@]}"; do
-	mkdir -p "$(dirname "$live")"
-	# -S: write a temp file and rename, so a cron evaluate never reads half a script.
-	install -S -m "${FILES[$live]}" -o root -g wheel "$(src_for "$live")" "$live"
-	say "installed $live"
-done
+# Credentials first, so the sender never exists without them.
 if [[ ! -s $NOTIFY_CONF ]]; then
 	( umask 077; printf 'PUSHOVER_USER=%s\nPUSHOVER_TOKEN=%s\n' "$(cred -u)" "$(cred -t)" > "$NOTIFY_CONF" )
 	chown root:wheel "$NOTIFY_CONF"; chmod 0600 "$NOTIFY_CONF"
 	say "created $NOTIFY_CONF (0600)"
 fi
+for live in "${INSTALL_ORDER[@]}"; do
+	mkdir -p "$(dirname "$live")"
+	# -S: write a temp file and rename, so a cron evaluate never reads half a script.
+	install -S -m "${FILES[$live]}" -o root -g wheel "$(src_for "$live")" "$live" ||
+		die "installing $live failed; files before it in the list are installed. Roll back with: $REPO/scripts/rollback.sh $(cat "$BACKUP_DIR/LATEST-p3fixes") --apply"
+	say "installed $live"
+done
 if [[ -e /etc/hosts.new ]]; then rm -f /etc/hosts.new; say "removed the old script's leftover /etc/hosts.new"; fi
 
 hr "verify: IPv6 source selection"
 service ip6addrctl start >/dev/null 2>&1 || true
 v6_sources | tee "$STAGE/v6.after"
-bad_src=$(/usr/bin/grep -c -v ' other$' "$STAGE/v6.after" || true)
+bad_src=$(/usr/bin/grep -c ' bak$' "$STAGE/v6.after" || true)
+err_src=$(/usr/bin/grep -c ' error:' "$STAGE/v6.after" || true)
 ping_ok=0; ping_n=0
 for d in $V6_PROBE_DSTS; do
 	ping_n=$((ping_n + 1))
 	if ping -6 -c 2 -t 5 "$d" >/dev/null 2>&1; then ping_ok=$((ping_ok + 1)); fi
 done
-if (( bad_src == 0 )); then pass "router no longer picks the BACKUP address for traffic leaving PRIMARY"
-else fail "$bad_src destination(s) still get the BACKUP source address or an error"; fi
+if (( bad_src == 0 && err_src == 0 )); then pass "router no longer picks the BACKUP address for traffic leaving PRIMARY"
+elif (( bad_src != 0 )); then fail "$bad_src destination(s) still get the BACKUP source address"
+else fail "$err_src destination(s) had no usable IPv6 route just now (not a statement about the policy)"; fi
 # Replies to real packets: independent of the address reading above.
 if (( ping_ok == ping_n )); then pass "IPv6 ping from router, no source given: $ping_ok/$ping_n destinations answer"
 else fail "IPv6 ping from router: only $ping_ok/$ping_n destinations answer"; fi
 if (( bad_src != 0 )) && (( ping_ok == 0 )); then
-	say "the policy did not help: removing it so the address policy is back to stock"
-	if [[ $had_policy == no ]]; then rm -f "$POLICY"; fi
+	if [[ $had_policy == no ]]; then
+		rm -f "$POLICY"
+		say "the policy did not help: removed $POLICY, address policy is back to stock"
+	else
+		tar -xzpf "$(cat "$BACKUP_DIR/LATEST-p3fixes")" -C / "${POLICY#/}"
+		say "the policy did not help: restored the previous $POLICY from the backup"
+	fi
 	service ip6addrctl start >/dev/null 2>&1 || true
 fi
 
 hr "verify: FIB 0"
-verdict="$($CTL evaluate 2>&1 | tail -1)"
+verdict="$($CTL evaluate 2>&1 | tail -1 || true)"
 echo "  evaluate: $verdict"
-$CTL status
+if $CTL reconcile >/dev/null 2>&1; then pass "controller accepts 'reconcile' (what the dhclient hook now calls)"; else fail "'$CTL reconcile' failed"; fi
+$CTL status || true
 state="$(cat /var/run/wan_state 2>/dev/null || echo pri)"
-want_gw="$(cat "/var/db/${state}_router")"
+want_gw="$(cat "/var/db/${state}_router" 2>/dev/null || true)"
 have="$(netstat -rn -4 -F 0 | awk '$1 == "default" { print $2 }' | tr '\n' ' ')"; have=${have% }
 if [[ $have == "$want_gw" ]]; then pass "FIB 0 has exactly one default, via $want_gw ($state)"
 else fail "FIB 0 defaults: '${have:-none}', want only $want_gw ($state)"; fi

@@ -35,6 +35,12 @@ run_case() {
 	sed -e "s|/etc/dhclient-scripts/set_gateway_entries.sh|true|" \
 	    -e "s|/etc/dhclient-scripts/|$SRC/|" "${EXIT_HOOK:-$SRC/dhclient-${_if}-exit-hooks}" > "$_t/exit"
 	sed -n '1,/^# Start of active code/p' "$STOCK" > "$_t/stock_funcs"
+	_wf=/nonexistent   # FAKE_WF=yes: a controller stub that records how it was called
+	if [ "${FAKE_WF:-}" = yes ]; then
+		_wf="$_t/wf"
+		printf '#!/bin/sh\necho "wan-failover $*" >> "%s/calls"\n' "$_t" > "$_wf"
+		chmod +x "$_wf"
+	fi
 	cat > "$_t/run" <<EOF
 route() {
 	echo "route \$*" >> "$_t/calls"
@@ -51,8 +57,8 @@ ping() { # all-routers probe: \${PING_REPLY:-} is the router that answers
 	return 0
 }
 arp() { :; }
-netstat() { # FIB 0 table: one default per gateway in \${FAKE_FIB0:-}
-	for _fg in \${FAKE_FIB0:-}; do echo "default \$_fg UGS ixl0"; done
+netstat() { # any FIB: one default per gateway in \${FAKE_DEFAULTS:-}
+	for _fg in \${FAKE_DEFAULTS:-}; do echo "default \$_fg UGS ixl0"; done
 }
 . "$_t/stock_funcs"
 IFCONFIG=ifconfig   # stock sets /sbin/ifconfig -n; use the stub
@@ -64,7 +70,7 @@ new_ip_address="192.0.2.50"
 new_subnet_mask="255.255.255.0"
 WAN_STATE_FILE="$_t/wan_state"
 WAN_DB_DIR="$_t"
-WAN_FAILOVER=/nonexistent
+WAN_FAILOVER=$_wf
 WAN_PFCTL=pfctl
 [ "$_ours" = yes ] && . "$_t/enter"
 $_snippet
@@ -109,20 +115,30 @@ check "pri RENEW sets FIB 1 default" has "$o" 'add -fib 1 default 192.0.2.1'
 o=$(run_case ix0 - - EXPIRE yes 'wan_exit')
 check "bak EXPIRE removes FIB 2 default" has "$o" 'delete -fib 2 default'
 
-# FIB 0 must hold one default. With net.route.multipath=1 a second `route add
-# default` builds a two-path group (2026-11-10), so a lease event on the
-# ACTIVE uplink removes any FIB 0 default that is not its own router.
-o=$(export FAKE_FIB0="192.0.2.1 198.51.100.1"; run_case ixl0 - ixl0 RENEW yes 'wan_exit')
-check "active pri RENEW removes the extra FIB 0 default" has "$o" '^route -n delete -fib 0 default 198.51.100.1$'
-check "active pri RENEW keeps its own FIB 0 default" lacks "$o" 'delete -fib 0 default 192.0.2.1'
-o=$(export FAKE_FIB0="192.0.2.1 198.51.100.1"; run_case ix0 bak ix0 RENEW yes 'wan_exit')
-check "active bak RENEW removes the extra FIB 0 default" has "$o" '^route -n delete -fib 0 default 198.51.100.1$'
-o=$(export FAKE_FIB0="192.0.2.1 198.51.100.1"; run_case ix0 - - RENEW yes 'wan_exit')
+# FIB 0 is the controller's. After a lease event on the ACTIVE uplink the
+# hook asks the controller to reconcile it (under the controller's lock) and
+# never edits FIB 0 itself; the inactive uplink does neither.
+o=$(export FAKE_WF=yes FAKE_DEFAULTS="192.0.2.1 198.51.100.1"; run_case ixl0 - ixl0 RENEW yes 'wan_exit; wait')
+check "active pri RENEW asks the controller to reconcile FIB 0" has "$o" '^wan-failover reconcile$'
+check "active pri RENEW does not edit FIB 0 itself" lacks "$o" 'delete -fib 0'
+o=$(export FAKE_WF=yes FAKE_DEFAULTS="192.0.2.1 198.51.100.1"; run_case ix0 bak ix0 RENEW yes 'wan_exit; wait')
+check "active bak RENEW asks the controller to reconcile FIB 0" has "$o" '^wan-failover reconcile$'
+o=$(export FAKE_WF=yes FAKE_DEFAULTS="192.0.2.1 198.51.100.1"; run_case ix0 - - RENEW yes 'wan_exit; wait')
+check "inactive bak RENEW does not ask for a FIB 0 reconcile" lacks "$o" '^wan-failover reconcile$'
 check "inactive bak RENEW never deletes a FIB 0 default" lacks "$o" 'delete -fib 0'
-o=$(export FAKE_FIB0="198.51.100.1"; run_case ixl0 - ixl0 RENEW yes 'wan_exit')
-check "active pri whose router is not in FIB 0 deletes nothing (never empties FIB 0)" lacks "$o" 'delete -fib 0'
-o=$(export FAKE_FIB0="192.0.2.1"; run_case ixl0 - ixl0 RENEW yes 'wan_exit')
-check "active pri with a single correct default deletes nothing" lacks "$o" 'delete -fib 0'
+
+# The probe FIBs must hold one default too: with net.route.multipath=1 a
+# lease whose router changed would leave both routers in FIB 1/2 and the
+# probe hashed onto either (a spurious failover, or a masked failure).
+o=$(export FAKE_DEFAULTS="192.0.2.1 198.51.100.1"; run_case ix0 - - RENEW yes 'wan_exit')
+check "bak RENEW with a changed router removes the old FIB 2 default" has "$o" '^route -n delete -fib 2 default 198.51.100.1$'
+check "bak RENEW keeps its own FIB 2 default" lacks "$o" 'delete -fib 2 default 192.0.2.1'
+o=$(export FAKE_DEFAULTS="192.0.2.1 198.51.100.1"; run_case ixl0 - ixl0 RENEW yes 'wan_exit')
+check "pri RENEW with a changed router removes the old FIB 1 default" has "$o" '^route -n delete -fib 1 default 198.51.100.1$'
+o=$(export FAKE_DEFAULTS="198.51.100.1"; run_case ix0 - - RENEW yes 'wan_exit')
+check "own router missing from FIB 2: nothing deleted (never empties the FIB)" lacks "$o" 'delete -fib 2 default'
+o=$(export FAKE_DEFAULTS="192.0.2.1"; run_case ix0 - - RENEW yes 'wan_exit')
+check "single correct FIB 2 default: nothing deleted" lacks "$o" 'delete -fib 2 default'
 
 # pf NAT tables follow the lease (pf.conf NATs to <pri_addr>/<bak_addr>, not
 # (if:0), because the rc.conf mgmt alias can be the first address after boot).

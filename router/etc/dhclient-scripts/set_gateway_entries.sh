@@ -83,6 +83,21 @@ render() {
 	}' "$HOSTS"
 }
 
+# Counts the non-empty lines of <file> that name none of our names.
+other_lines() { # other_lines <file>
+	awk -v names="$NAMES" '
+	BEGIN { n = split(names, a, " "); for (i = 1; i <= n; i++) want[a[i]] = 1 }
+	/^[ \t]*$/ { next }
+	{
+		body = $0
+		if ((c = index(body, "#")) > 0) body = substr(body, 1, c - 1)
+		m = split(body, f, /[ \t]+/)
+		for (i = 2; i <= m; i++) if (f[i] in want) next
+		count++
+	}
+	END { print count + 0 }' "$1"
+}
+
 if [[ ! -r $HOSTS ]]; then
 	${LOGGER} "Cannot read ${HOSTS}"
 	exit 1
@@ -100,12 +115,13 @@ if (( rc != 0 )) || [[ ! -s $tmp ]]; then
 	${LOGGER} "Building the new ${HOSTS} failed (awk exit ${rc}); left unchanged"
 	exit 1
 fi
-# The new file must keep every line that does not mention our names.
-kept_old=$(grep -c . "$HOSTS")
-kept_new=$(grep -c . "$tmp")
-name_count=$(wc -w <<<"$NAMES")
-if (( kept_new + name_count < kept_old )); then
-	${LOGGER} "New ${HOSTS} lost lines (${kept_old} -> ${kept_new}); left unchanged"
+# The new file must keep every line that does not mention our names. Lines
+# that do are left out of both counts (they are meant to change); a shared
+# line keeps its other names, so the new count can only be equal or higher.
+kept_old=$(other_lines "$HOSTS")
+kept_new=$(other_lines "$tmp")
+if (( kept_new < kept_old )); then
+	${LOGGER} "New ${HOSTS} lost unrelated lines (${kept_old} -> ${kept_new}); left unchanged"
 	exit 1
 fi
 

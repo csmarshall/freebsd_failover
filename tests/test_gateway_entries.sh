@@ -89,6 +89,15 @@ else
 	check "unwritable directory: hosts unchanged" [ "$(cksum < "$H")" = "$sum" ]
 fi
 
+# Many stale lines for one name (more dropped than added) must still be
+# repaired: the lost-lines guard counts only lines that do not name ours.
+fixture
+for i in 1 2 3 4 5 6 7; do echo "203.0.113.$i gw-one.test" >> "$H"; done
+run 198.51.100.1 "$NAMES"; rc=$?
+check "many stale lines for a name: exit 0" [ "$rc" -eq 0 ]
+check "many stale lines for a name: exactly one line left for it" [ "$(count '^[0-9.]* gw-one.test #' "$H")" -eq 1 ]
+check "many stale lines for a name: unrelated host kept" [ "$(count '^192.0.2.10 nas$' "$H")" -eq 1 ]
+
 # Two uplinks' hooks at once: both sets of names must land.
 fixture
 run 198.51.100.1 "$NAMES" &

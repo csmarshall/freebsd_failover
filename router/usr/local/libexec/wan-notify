@@ -34,8 +34,14 @@ low) priority=-1 ;;
 esac
 
 if [ ! -r "$CONF" ]; then echo "wan-notify: cannot read $CONF" >&2; exit 2; fi
+# Read as data, never sourced: nothing in the file is executed.
 PUSHOVER_USER=; PUSHOVER_TOKEN=
-. "$CONF"
+while IFS='=' read -r key value; do
+	case $key in
+	PUSHOVER_USER) PUSHOVER_USER=$value ;;
+	PUSHOVER_TOKEN) PUSHOVER_TOKEN=$value ;;
+	esac
+done < "$CONF"
 if [ -z "$PUSHOVER_USER" ] || [ -z "$PUSHOVER_TOKEN" ]; then
 	echo "wan-notify: $CONF must set PUSHOVER_USER and PUSHOVER_TOKEN" >&2; exit 2
 fi
@@ -43,7 +49,10 @@ fi
 message=$(cat)
 if [ -z "$message" ]; then echo "wan-notify: empty message on stdin" >&2; exit 2; fi
 
-printf 'form-string = "token=%s"\nform-string = "user=%s"\n' "$PUSHOVER_TOKEN" "$PUSHOVER_USER" |
+# curl's config syntax: inside double quotes, \ and " must be escaped, or the
+# value is cut short at the first quote and the request goes out unauthenticated.
+cfg_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+printf 'form-string = "token=%s"\nform-string = "user=%s"\n' "$(cfg_escape "$PUSHOVER_TOKEN")" "$(cfg_escape "$PUSHOVER_USER")" |
 	"$CURL" -4 --silent --show-error --fail --output /dev/null \
 		--connect-timeout "$CONNECT_TIMEOUT_S" --max-time "$ATTEMPT_TIMEOUT_S" \
 		--retry "$RETRIES" --retry-delay "$RETRY_DELAY_S" --retry-all-errors \

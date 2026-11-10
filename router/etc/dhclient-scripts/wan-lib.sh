@@ -62,6 +62,9 @@ wan_fib_set_default() {
 	    route -n change -fib "$wan_fib" -host "$_gw" -interface "$interface" >/dev/null 2>&1
 	route -n add -fib "$wan_fib" default "$_gw" >/dev/null 2>&1 ||
 	    route -n change -fib "$wan_fib" default "$_gw" >/dev/null 2>&1
+	# A lease whose router changed would otherwise leave the probe FIB with
+	# both routers, and the probe hashed onto either.
+	wan_fib_prune_defaults "$wan_fib" "$_gw"
 	$LOGGER "$wan_role: FIB $wan_fib default via $_gw ($interface, $reason)"
 }
 
@@ -99,26 +102,34 @@ wan_fib_set_default6() {
 	) &
 }
 
-# The active uplink's lease adds or replaces FIB 0's default through the stock
-# dhclient-script code. With net.route.multipath=1 an add beside a default
-# that has another gateway builds a two-path group instead of failing, so
-# after a lease event on the active uplink remove every FIB 0 default that is
-# not this lease's router. Only when this router is itself in FIB 0: pruning
-# must never leave FIB 0 without a default. The inactive uplink never touches
-# FIB 0 (wan-failover reconciles it every minute).
-wan_fib0_prune() { # wan_fib0_prune <gateway>
-	[ "$(wan_active_role)" = "$wan_role" ] || return 0
-	_defaults=$(netstat -rn -4 -F 0 | awk '$1 == "default" { print $2 }')
+# With net.route.multipath=1, `route add default <gw>` beside a default that
+# has another gateway does not fail: it builds a two-path group and traffic
+# is hashed across both. So after setting a default, every other default in
+# that FIB is deleted by gateway. Only when <gateway> is itself in the table:
+# this must never remove the last default.
+wan_fib_prune_defaults() { # wan_fib_prune_defaults <fib> <gateway>
+	_defaults=$(netstat -rn -4 -F "$1" | awk '$1 == "default" { print $2 }')
 	_mine=no
 	for _g in $_defaults; do
-		[ "$_g" = "$1" ] && _mine=yes
+		[ "$_g" = "$2" ] && _mine=yes
 	done
 	[ "$_mine" = yes ] || return 0
 	for _g in $_defaults; do
-		[ "$_g" = "$1" ] && continue
-		route -n delete -fib 0 default "$_g" >/dev/null 2>&1
-		$LOGGER "$wan_role: FIB 0 extra default via $_g removed ($interface, $reason)"
+		[ "$_g" = "$2" ] && continue
+		if route -n delete -fib "$1" default "$_g" >/dev/null 2>&1; then
+			$LOGGER "$wan_role: FIB $1 extra default via $_g removed ($interface, $reason)"
+		fi
 	done
+}
+
+# FIB 0 belongs to the controller. The stock dhclient-script code has just
+# added or replaced FIB 0's default for the active uplink, which under
+# multipath can leave two; rather than edit FIB 0 here (and race a
+# transition), ask the controller to put it right under its own lock.
+wan_fib0_reconcile() {
+	[ "$(wan_active_role)" = "$wan_role" ] || return 0
+	[ -x "$WAN_FAILOVER" ] || return 0
+	"$WAN_FAILOVER" reconcile >/dev/null 2>&1 &
 }
 
 # Called from the per-interface exit hook.
@@ -134,7 +145,7 @@ wan_exit() {
 		echo "$_gw" > "$WAN_DB_DIR/${wan_role}_router"
 		echo "$new_ip_address" > "$WAN_DB_DIR/${wan_role}_ip"
 		wan_fib_set_default "$_gw"
-		wan_fib0_prune "$_gw"
+		wan_fib0_reconcile
 		wan_pf_set_addr
 		wan_fib_set_default6
 		# Probes bind to the WAN address; restart them when it changes (P3).
