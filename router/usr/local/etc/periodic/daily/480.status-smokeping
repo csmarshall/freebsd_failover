@@ -1,0 +1,64 @@
+#!/bin/sh -
+#
+# Daily check that smokeping still draws graphs on this rrdtool.
+#
+# smokeping 2.9.0 escapes colons in rrdtool COMMENTs only when
+# `$RRDs::VERSION >= 1.199908`; rrdtool 1.11's RRDs reports 1.011, so every
+# graph fails. scripts/smokeping_fixes.sh patches that comparison in two
+# package-owned files, which a `pkg upgrade smokeping` silently reverts.
+# This reports (mail + Pushover) when the unpatched comparison is back while
+# RRDs is still below the threshold, or when a real page render shows an
+# rrdtool ERROR. It never re-patches: re-run smokeping_fixes.sh --apply.
+#
+# Enable in /etc/periodic.conf:  daily_status_smokeping_enable="YES"
+# Test overrides (env): SMOKEPING_LIB, SMOKEPING_CHECK_URL, SMOKEPING_ALERT
+
+if [ -r /etc/defaults/periodic.conf ]; then
+	. /etc/defaults/periodic.conf
+	source_periodic_confs
+fi
+
+: ${SMOKEPING_LIB:=/usr/local/smokeping/lib}
+: ${SMOKEPING_CHECK_URL:=https://router.example.com/smokeping/smokeping.fcgi?target=FPings.Network.Uplinks.Compare}
+: ${SMOKEPING_ALERT:=/usr/local/bin/pushover_message.sh}
+OLD_TEST='$RRDs::VERSION >= 1.199908'
+THRESHOLD=1.199908
+
+case "${daily_status_smokeping_enable:-NO}" in
+[Yy][Ee][Ss]) ;;
+*) exit 0 ;;
+esac
+
+echo
+echo "Checking smokeping graphs:"
+problems=""
+
+rrds=$(/usr/local/bin/perl -MRRDs -e 'print $RRDs::VERSION' 2>/dev/null)
+below=$(/usr/local/bin/perl -e 'print(($ARGV[0] ne "" && $ARGV[0] < $ARGV[1]) ? 1 : 0)' "$rrds" "$THRESHOLD")
+left=0
+for f in "$SMOKEPING_LIB/Smokeping.pm" "$SMOKEPING_LIB/Smokeping/Graphs.pm"; do
+	n=$(/usr/bin/grep -cF "$OLD_TEST" "$f" 2>/dev/null)
+	left=$((left + ${n:-0}))
+done
+if [ "$left" -gt 0 ] && [ "$below" = 1 ]; then
+	problems="${problems}version-compare patch reverted ($left unpatched comparison(s), RRDs $rrds < $THRESHOLD; pkg upgrade?). "
+fi
+
+page=$(/usr/local/bin/curl -sk -m 90 "$SMOKEPING_CHECK_URL" 2>&1)
+rc=$?
+if [ $rc -ne 0 ]; then
+	problems="${problems}could not fetch $SMOKEPING_CHECK_URL (curl $rc). "
+else
+	errs=$(printf '%s\n' "$page" | /usr/bin/grep -c 'ERROR')
+	[ "$errs" -gt 0 ] && problems="${problems}graph page shows $errs rrdtool ERROR line(s). "
+fi
+
+if [ -z "$problems" ]; then
+	echo "  ok (RRDs $rrds, 0 unpatched comparisons, page renders)"
+	exit 0
+fi
+echo "  PROBLEM: $problems"
+echo "  Fix: sudo ~admin/work/claude/home_internet_failover/scripts/smokeping_fixes.sh --apply"
+printf 'smokeping on %s: %s\n' "$(hostname -s)" "$problems" |
+	timeout 30 "$SMOKEPING_ALERT" normal >/dev/null 2>&1
+exit 2

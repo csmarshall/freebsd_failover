@@ -1,0 +1,26 @@
+#!/bin/sh
+#
+# PROVIDE: wan_failover
+# REQUIRE: NETWORKING pf
+# KEYWORD: shutdown
+#
+# PRIMARY/BACKUP WAN failover: starts the four dpinger probes (FIB 1 = PRIMARY,
+# FIB 2 = BACKUP) and one delayed evaluate. See /usr/local/sbin/wan-failover.
+#
+# wan_failover_enable (bool): Set to "YES" to enable. Default "NO".
+
+. /etc/rc.subr
+
+name=wan_failover
+rcvar=wan_failover_enable
+load_rc_config $name
+: ${wan_failover_enable:=NO}
+
+command=/usr/local/sbin/wan-failover
+start_cmd="${command} start"
+stop_cmd="${command} stop"
+status_cmd="${command} status"
+evaluate_cmd="${command} evaluate"
+extra_commands="status evaluate"
+
+run_rc_command "$1"

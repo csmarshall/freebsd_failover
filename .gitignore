@@ -1,0 +1,6 @@
+*.log
+.claude/
+__pycache__/
+private/
+session-state.md
+.remember/

@@ -1,0 +1,16 @@
+# BACKUP backup WAN (ix0, 5G CPE 5G) exit hook. Sourced (POSIX sh) by
+# /etc/dhclient-exit-hooks inside /sbin/dhclient-script. Never `exit` here:
+# that would replace dhclient-script's own exit status.
+
+type wan_exit >/dev/null 2>&1 || return 0
+wan_exit
+
+# gateway-carrier/backup kept as aliases until smokeping's config is renamed.
+/etc/dhclient-scripts/set_gateway_entries.sh "$(wan_first_router)" \
+    "gateway-bak.localhost gateway-backup.localhost" \
+    allow-private
+
+# router-as-CLAT: re-sync the ::464 source alias, NAT64 route and af-to rules
+# now rather than at the next cron minute (CLAT_PLAN.md).
+: "${BACKUP_CLAT:=/usr/local/sbin/bak-clat}"
+[ -x "$BACKUP_CLAT" ] && "$BACKUP_CLAT" sync >/dev/null 2>&1 &

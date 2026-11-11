@@ -1,0 +1,12 @@
+# Sourced (POSIX sh) by /sbin/dhclient-script before it acts.
+
+add_new_resolv_conf() {
+	# unbound on 127.0.0.1 is the only resolver; don't let leases change it.
+	return 0
+}
+
+# Per-interface hooks are SOURCED so they can override dhclient-script
+# functions (is_default_interface) and set variables it uses.
+if [ -r "/etc/dhclient-scripts/dhclient-${interface}-enter-hooks" ]; then
+	. "/etc/dhclient-scripts/dhclient-${interface}-enter-hooks"
+fi
